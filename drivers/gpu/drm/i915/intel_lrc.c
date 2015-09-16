@@ -337,6 +337,8 @@ static u64 execlists_update_context(struct drm_i915_gem_request *rq)
 	if (ppgtt && !i915_vm_is_48bit(&ppgtt->base))
 		execlists_update_context_pdps(ppgtt, reg_state);
 
+	i915_oa_update_reg_state(rq->engine, rq->ctx, reg_state);
+
 	return ce->lrc_desc;
 }
 
@@ -1878,6 +1880,9 @@ static void execlists_init_reg_state(u32 *regs,
 		regs[CTX_LRI_HEADER_2] = MI_LOAD_REGISTER_IMM(1);
 		CTX_REG(regs, CTX_R_PWR_CLK_STATE, GEN8_R_PWR_CLK_STATE,
 			make_rpcs(dev_priv));
+
+		atomic_set(&ctx->engine[RCS].oa_state_dirty, 1);
+		i915_oa_update_reg_state(engine, ctx, regs);
 	}
 }
 

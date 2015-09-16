@@ -151,6 +151,7 @@ struct i915_gem_context {
 		u64 lrc_desc;
 		int pin_count;
 		bool initialised;
+		atomic_t oa_state_dirty;
 	} engine[I915_NUM_ENGINES];
 
 	/** ring_size: size for allocating the per-engine ring buffer */
