@@ -47,6 +47,9 @@ static const struct i915_oa_reg b_counter_config_render_basic[] = {
 	{ _MMIO(0x2710), 0x00000000 },
 };
 
+static const struct i915_oa_reg flex_eu_config_render_basic[] = {
+};
+
 static const struct i915_oa_reg mux_config_render_basic[] = {
 	{ _MMIO(0x253a4), 0x01600000 },
 	{ _MMIO(0x25440), 0x00100000 },
@@ -137,6 +140,9 @@ static const struct i915_oa_reg b_counter_config_compute_basic[] = {
 	{ _MMIO(0x236c), 0x00000000 },
 };
 
+static const struct i915_oa_reg flex_eu_config_compute_basic[] = {
+};
+
 static const struct i915_oa_reg mux_config_compute_basic[] = {
 	{ _MMIO(0x253a4), 0x00000000 },
 	{ _MMIO(0x2681c), 0x01f00800 },
@@ -203,6 +209,9 @@ static const struct i915_oa_reg b_counter_config_compute_extended[] = {
 	{ _MMIO(0x27ac), 0x0000fffe },
 };
 
+static const struct i915_oa_reg flex_eu_config_compute_extended[] = {
+};
+
 static const struct i915_oa_reg mux_config_compute_extended[] = {
 	{ _MMIO(0x2681c), 0x3eb00800 },
 	{ _MMIO(0x26820), 0x00900000 },
@@ -258,6 +267,9 @@ static const struct i915_oa_reg b_counter_config_memory_reads[] = {
 	{ _MMIO(0x27a4), 0x0000fc00 },
 	{ _MMIO(0x27a8), 0x0007f8f2 },
 	{ _MMIO(0x27ac), 0x0000fc00 },
+};
+
+static const struct i915_oa_reg flex_eu_config_memory_reads[] = {
 };
 
 static const struct i915_oa_reg mux_config_memory_reads[] = {
@@ -320,6 +332,9 @@ static const struct i915_oa_reg b_counter_config_memory_writes[] = {
 	{ _MMIO(0x27ac), 0x0000fc00 },
 };
 
+static const struct i915_oa_reg flex_eu_config_memory_writes[] = {
+};
+
 static const struct i915_oa_reg mux_config_memory_writes[] = {
 	{ _MMIO(0x253a4), 0x34300000 },
 	{ _MMIO(0x25440), 0x01500000 },
@@ -356,6 +371,9 @@ static const struct i915_oa_reg b_counter_config_sampler_balance[] = {
 	{ _MMIO(0x2714), 0x00800000 },
 	{ _MMIO(0x2720), 0x00000000 },
 	{ _MMIO(0x2724), 0x00800000 },
+};
+
+static const struct i915_oa_reg flex_eu_config_sampler_balance[] = {
 };
 
 static const struct i915_oa_reg mux_config_sampler_balance[] = {
@@ -436,6 +454,11 @@ int i915_oa_select_metric_set_hsw(struct drm_i915_private *dev_priv)
 		dev_priv->perf.oa.b_counter_regs_len =
 			ARRAY_SIZE(b_counter_config_render_basic);
 
+		dev_priv->perf.oa.flex_regs =
+			flex_eu_config_render_basic;
+		dev_priv->perf.oa.flex_regs_len =
+			ARRAY_SIZE(flex_eu_config_render_basic);
+
 		return 0;
 	case METRIC_SET_ID_COMPUTE_BASIC:
 		dev_priv->perf.oa.mux_regs =
@@ -455,6 +478,11 @@ int i915_oa_select_metric_set_hsw(struct drm_i915_private *dev_priv)
 			b_counter_config_compute_basic;
 		dev_priv->perf.oa.b_counter_regs_len =
 			ARRAY_SIZE(b_counter_config_compute_basic);
+
+		dev_priv->perf.oa.flex_regs =
+			flex_eu_config_compute_basic;
+		dev_priv->perf.oa.flex_regs_len =
+			ARRAY_SIZE(flex_eu_config_compute_basic);
 
 		return 0;
 	case METRIC_SET_ID_COMPUTE_EXTENDED:
@@ -476,6 +504,11 @@ int i915_oa_select_metric_set_hsw(struct drm_i915_private *dev_priv)
 		dev_priv->perf.oa.b_counter_regs_len =
 			ARRAY_SIZE(b_counter_config_compute_extended);
 
+		dev_priv->perf.oa.flex_regs =
+			flex_eu_config_compute_extended;
+		dev_priv->perf.oa.flex_regs_len =
+			ARRAY_SIZE(flex_eu_config_compute_extended);
+
 		return 0;
 	case METRIC_SET_ID_MEMORY_READS:
 		dev_priv->perf.oa.mux_regs =
@@ -495,6 +528,11 @@ int i915_oa_select_metric_set_hsw(struct drm_i915_private *dev_priv)
 			b_counter_config_memory_reads;
 		dev_priv->perf.oa.b_counter_regs_len =
 			ARRAY_SIZE(b_counter_config_memory_reads);
+
+		dev_priv->perf.oa.flex_regs =
+			flex_eu_config_memory_reads;
+		dev_priv->perf.oa.flex_regs_len =
+			ARRAY_SIZE(flex_eu_config_memory_reads);
 
 		return 0;
 	case METRIC_SET_ID_MEMORY_WRITES:
@@ -516,6 +554,11 @@ int i915_oa_select_metric_set_hsw(struct drm_i915_private *dev_priv)
 		dev_priv->perf.oa.b_counter_regs_len =
 			ARRAY_SIZE(b_counter_config_memory_writes);
 
+		dev_priv->perf.oa.flex_regs =
+			flex_eu_config_memory_writes;
+		dev_priv->perf.oa.flex_regs_len =
+			ARRAY_SIZE(flex_eu_config_memory_writes);
+
 		return 0;
 	case METRIC_SET_ID_SAMPLER_BALANCE:
 		dev_priv->perf.oa.mux_regs =
@@ -535,6 +578,11 @@ int i915_oa_select_metric_set_hsw(struct drm_i915_private *dev_priv)
 			b_counter_config_sampler_balance;
 		dev_priv->perf.oa.b_counter_regs_len =
 			ARRAY_SIZE(b_counter_config_sampler_balance);
+
+		dev_priv->perf.oa.flex_regs =
+			flex_eu_config_sampler_balance;
+		dev_priv->perf.oa.flex_regs_len =
+			ARRAY_SIZE(flex_eu_config_sampler_balance);
 
 		return 0;
 	default:
@@ -714,19 +762,19 @@ i915_perf_register_sysfs_hsw(struct drm_i915_private *dev_priv)
 	return 0;
 
 error_sampler_balance:
-	if (get_sampler_balance_mux_config(dev_priv, &mux_len))
+	if (get_memory_writes_mux_config(dev_priv, &mux_len))
 		sysfs_remove_group(dev_priv->perf.metrics_kobj, &group_memory_writes);
 error_memory_writes:
-	if (get_sampler_balance_mux_config(dev_priv, &mux_len))
+	if (get_memory_reads_mux_config(dev_priv, &mux_len))
 		sysfs_remove_group(dev_priv->perf.metrics_kobj, &group_memory_reads);
 error_memory_reads:
-	if (get_sampler_balance_mux_config(dev_priv, &mux_len))
+	if (get_compute_extended_mux_config(dev_priv, &mux_len))
 		sysfs_remove_group(dev_priv->perf.metrics_kobj, &group_compute_extended);
 error_compute_extended:
-	if (get_sampler_balance_mux_config(dev_priv, &mux_len))
+	if (get_compute_basic_mux_config(dev_priv, &mux_len))
 		sysfs_remove_group(dev_priv->perf.metrics_kobj, &group_compute_basic);
 error_compute_basic:
-	if (get_sampler_balance_mux_config(dev_priv, &mux_len))
+	if (get_render_basic_mux_config(dev_priv, &mux_len))
 		sysfs_remove_group(dev_priv->perf.metrics_kobj, &group_render_basic);
 error_render_basic:
 	return ret;
