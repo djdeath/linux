@@ -44,7 +44,9 @@ from sphinx.domains.c import CDomain as Base_CDomain
 __version__  = '1.0'
 
 # Get Sphinx version
-major, minor, patch = map(int, sphinx.__version__.split("."))
+# Note: sphinx.version_info only exists >= 1.2, and __version__ may not
+# include patch version (unknown if minor may be elided too)
+(major, minor, patch) = list(map(int, (sphinx.__version__ + ".0.0").split(".")))[:3]
 
 def setup(app):
 

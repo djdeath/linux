@@ -17,7 +17,9 @@ import os
 import sphinx
 
 # Get Sphinx version
-major, minor, patch = map(int, sphinx.__version__.split("."))
+# Note: sphinx.version_info only exists >= 1.2, and __version__ may not
+# include patch version (unknown if minor may be elided too)
+(major, minor, patch) = list(map(int, (sphinx.__version__ + ".0.0").split(".")))[:3]
 
 
 # If extensions (or modules to document with autodoc) are in another directory,
