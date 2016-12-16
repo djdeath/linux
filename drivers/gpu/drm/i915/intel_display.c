@@ -11585,24 +11585,17 @@ intel_compare_link_m_n(const struct intel_link_m_n *m_n,
 static void __printf(3, 4)
 pipe_config_err(bool adjust, const char *name, const char *format, ...)
 {
-	char *level;
-	unsigned int category;
 	struct va_format vaf;
 	va_list args;
-
-	if (adjust) {
-		level = KERN_DEBUG;
-		category = DRM_UT_KMS;
-	} else {
-		level = KERN_ERR;
-		category = DRM_UT_NONE;
-	}
 
 	va_start(args, format);
 	vaf.fmt = format;
 	vaf.va = &args;
 
-	drm_printk(level, category, "mismatch in %s %pV", name, &vaf);
+	if (adjust)
+		DRM_DEBUG_KMS("mismatch in %s %pV", name, &vaf);
+	else
+		DRM_ERROR("mismatch in %s %pV", name, &vaf);
 
 	va_end(args);
 }

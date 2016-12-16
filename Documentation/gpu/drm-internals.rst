@@ -312,13 +312,37 @@ Printer
 -------
 
 .. kernel-doc:: include/drm/drm_print.h
-   :doc: print
+   :doc: DRM Printer
+
+.. kernel-doc:: include/drm/drm_print.h
+   :functions: drm_printer
+.. kernel-doc:: drivers/gpu/drm/drm_print.c
+   :functions: drm_printf
+
+
+Debug and Log Messages
+----------------------
+
+Dynamic Debug Messages
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. kernel-doc:: include/drm/drm_print.h
+   :doc: DRM Debug and Log Messages
+
+drm.drm_debug kernel parameter (deprecated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. kernel-doc:: include/drm/drm_print.h
+   :doc: drm_debug categories
+
+
+Print related internals
+-----------------------
 
 .. kernel-doc:: include/drm/drm_print.h
    :internal:
-
 .. kernel-doc:: drivers/gpu/drm/drm_print.c
-   :export:
+   :internal:
 
 
 Legacy Support Code
