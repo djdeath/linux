@@ -632,7 +632,8 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 		 * copying it to userspace...
 		 */
 		if (report32[0] == 0) {
-			DRM_NOTE("Skipping spurious, invalid OA report\n");
+			if (__ratelimit(&dev_priv->perf.oa.spurious_report_rs))
+				DRM_NOTE("Skipping spurious, invalid OA report\n");
 			continue;
 		}
 
@@ -2144,6 +2145,15 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 	if (!IS_HASWELL(dev_priv))
 		return;
 
+	/* Using the same limiting factors as printk_ratelimit() */
+	ratelimit_state_init(&dev_priv->perf.oa.spurious_report_rs,
+			5 * HZ, 10);
+	/* We use a DRM_NOTE for spurious reports so it would be
+	 * inconsistent to print a warning for throttling.
+	 */
+	ratelimit_set_flags(&dev_priv->perf.oa.spurious_report_rs,
+			RATELIMIT_MSG_ON_RELEASE);
+
 	hrtimer_init(&dev_priv->perf.oa.poll_check_timer,
 		     CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	dev_priv->perf.oa.poll_check_timer.function = oa_poll_check_timer_cb;
@@ -2181,6 +2191,11 @@ void i915_perf_fini(struct drm_i915_private *dev_priv)
 {
 	if (!dev_priv->perf.initialized)
 		return;
+
+	if (dev_priv->perf.oa.spurious_report_rs.missed) {
+		DRM_NOTE("%d spurious OA report notices suppressed due to ratelimiting",
+			 dev_priv->perf.oa.spurious_report_rs.missed);
+	}
 
 	unregister_sysctl_table(dev_priv->perf.sysctl_header);
 
