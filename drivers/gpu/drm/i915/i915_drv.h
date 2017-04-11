@@ -3009,6 +3009,10 @@ struct drm_i915_cmd_table {
 				 (INTEL_DEVID(dev) & 0x00F0) == 0x0020)
 #define IS_SKL_GT4(dev)		(IS_SKYLAKE(dev) && \
 				 (INTEL_DEVID(dev) & 0x00F0) == 0x0030)
+#define IS_KBL_GT2(dev)		(IS_KABYLAKE(dev) && \
+				 (INTEL_DEVID(dev) & 0x00F0) == 0x0010)
+#define IS_KBL_GT3(dev)		(IS_KABYLAKE(dev) && \
+				 (INTEL_DEVID(dev) & 0x00F0) == 0x0020)
 
 #define IS_PRELIMINARY_HW(intel_info) ((intel_info)->is_preliminary)
 
