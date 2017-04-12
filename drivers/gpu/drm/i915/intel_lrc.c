@@ -230,8 +230,6 @@ enum {
 
 static int execlists_context_deferred_alloc(struct i915_gem_context *ctx,
 					    struct intel_engine_cs *engine);
-static int intel_lr_context_pin(struct i915_gem_context *ctx,
-				struct intel_engine_cs *engine);
 static void execlists_init_reg_state(u32 *reg_state,
 				     struct i915_gem_context *ctx,
 				     struct intel_engine_cs *engine,
@@ -375,6 +373,8 @@ static u64 execlists_update_context(struct drm_i915_gem_request *rq)
 	 */
 	if (ppgtt && !USES_FULL_48BIT_PPGTT(ppgtt->base.dev))
 		execlists_update_context_pdps(ppgtt, reg_state);
+
+	i915_oa_update_reg_state(rq->engine, rq->ctx, reg_state);
 
 	return ce->lrc_desc;
 }
@@ -712,8 +712,8 @@ intel_logical_ring_advance(struct drm_i915_gem_request *request)
 	return 0;
 }
 
-static int intel_lr_context_pin(struct i915_gem_context *ctx,
-				struct intel_engine_cs *engine)
+int intel_lr_context_pin(struct i915_gem_context *ctx,
+			 struct intel_engine_cs *engine)
 {
 	struct intel_context *ce = &ctx->engine[engine->id];
 	void *vaddr;
@@ -2021,6 +2021,9 @@ static void execlists_init_reg_state(u32 *reg_state,
 		reg_state[CTX_LRI_HEADER_2] = MI_LOAD_REGISTER_IMM(1);
 		ASSIGN_CTX_REG(reg_state, CTX_R_PWR_CLK_STATE, GEN8_R_PWR_CLK_STATE,
 			       make_rpcs(dev_priv));
+
+		atomic_set(&ctx->engine[RCS].oa_state_dirty, 1);
+		i915_oa_update_reg_state(engine, ctx, reg_state);
 	}
 }
 
