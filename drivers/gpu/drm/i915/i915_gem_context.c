@@ -425,8 +425,8 @@ out:
 	return ctx;
 }
 
-static void i915_gem_context_unpin(struct i915_gem_context *ctx,
-				   struct intel_engine_cs *engine)
+void i915_gem_context_unpin(struct i915_gem_context *ctx,
+			    struct intel_engine_cs *engine)
 {
 	if (i915.enable_execlists) {
 		intel_lr_context_unpin(ctx, engine);

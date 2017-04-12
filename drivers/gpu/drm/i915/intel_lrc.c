@@ -230,8 +230,6 @@ enum {
 
 static int execlists_context_deferred_alloc(struct i915_gem_context *ctx,
 					    struct intel_engine_cs *engine);
-static int intel_lr_context_pin(struct i915_gem_context *ctx,
-				struct intel_engine_cs *engine);
 static void execlists_init_reg_state(u32 *reg_state,
 				     struct i915_gem_context *ctx,
 				     struct intel_engine_cs *engine,
@@ -843,8 +841,8 @@ err_unpin:
 	return ret;
 }
 
-static int intel_lr_context_pin(struct i915_gem_context *ctx,
-				struct intel_engine_cs *engine)
+int intel_lr_context_pin(struct i915_gem_context *ctx,
+			 struct intel_engine_cs *engine)
 {
 	struct intel_context *ce = &ctx->engine[engine->id];
 	void *vaddr;
@@ -2128,6 +2126,8 @@ static void execlists_init_reg_state(u32 *reg_state,
 		ASSIGN_CTX_REG(reg_state, CTX_R_PWR_CLK_STATE,
 			       GEN8_R_PWR_CLK_STATE,
 			       make_rpcs(&ctx->engine[engine->id].sseu));
+
+		i915_oa_init_reg_state(engine, ctx, reg_state);
 	}
 }
 

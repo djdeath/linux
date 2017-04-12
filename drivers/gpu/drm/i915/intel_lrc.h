@@ -62,6 +62,8 @@ enum {
 	INTEL_CONTEXT_SCHEDULE_OUT,
 };
 
+struct sseu_dev_info;
+
 /* Logical Rings */
 int intel_logical_ring_alloc_request_extras(struct drm_i915_gem_request *request);
 int intel_logical_ring_reserve_space(struct drm_i915_gem_request *request);
@@ -82,6 +84,8 @@ int intel_engines_init(struct drm_device *dev);
 struct i915_gem_context;
 
 uint32_t intel_lr_context_size(struct intel_engine_cs *engine);
+int intel_lr_context_pin(struct i915_gem_context *ctx,
+			 struct intel_engine_cs *engine);
 void intel_lr_context_unpin(struct i915_gem_context *ctx,
 			    struct intel_engine_cs *engine);
 
