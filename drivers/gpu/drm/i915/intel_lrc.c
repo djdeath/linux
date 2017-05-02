@@ -2519,8 +2519,8 @@ int logical_xcs_ring_init(struct intel_engine_cs *engine)
 	return logical_ring_init(engine);
 }
 
-static u32
-make_rpcs(struct drm_i915_private *dev_priv)
+static u32 make_rpcs(const struct sseu_dev_info *sseu,
+		     struct intel_sseu ctx_sseu)
 {
 	u32 rpcs = 0;
 
@@ -2530,24 +2530,23 @@ make_rpcs(struct drm_i915_private *dev_priv)
 	 * must make an explicit request through RPCS for full
 	 * enablement.
 	*/
-	if (INTEL_INFO(dev_priv)->sseu.has_slice_pg) {
+	if (sseu->has_slice_pg) {
 		rpcs |= GEN8_RPCS_S_CNT_ENABLE;
-		rpcs |= hweight8(INTEL_INFO(dev_priv)->sseu.slice_mask) <<
-			GEN8_RPCS_S_CNT_SHIFT;
+		rpcs |= hweight8(ctx_sseu.slice_mask) << GEN8_RPCS_S_CNT_SHIFT;
 		rpcs |= GEN8_RPCS_ENABLE;
 	}
 
-	if (INTEL_INFO(dev_priv)->sseu.has_subslice_pg) {
+	if (sseu->has_subslice_pg) {
 		rpcs |= GEN8_RPCS_SS_CNT_ENABLE;
-		rpcs |= hweight8(INTEL_INFO(dev_priv)->sseu.subslice_mask[0]) <<
+		rpcs |= hweight8(ctx_sseu.subslice_mask) <<
 			GEN8_RPCS_SS_CNT_SHIFT;
 		rpcs |= GEN8_RPCS_ENABLE;
 	}
 
-	if (INTEL_INFO(dev_priv)->sseu.has_eu_pg) {
-		rpcs |= INTEL_INFO(dev_priv)->sseu.eu_per_subslice <<
+	if (sseu->has_eu_pg) {
+		rpcs |= ctx_sseu.min_eus_per_subslice <<
 			GEN8_RPCS_EU_MIN_SHIFT;
-		rpcs |= INTEL_INFO(dev_priv)->sseu.eu_per_subslice <<
+		rpcs |= ctx_sseu.max_eus_per_subslice <<
 			GEN8_RPCS_EU_MAX_SHIFT;
 		rpcs |= GEN8_RPCS_ENABLE;
 	}
@@ -2671,7 +2670,8 @@ static void execlists_init_reg_state(u32 *regs,
 	if (rcs) {
 		regs[CTX_LRI_HEADER_2] = MI_LOAD_REGISTER_IMM(1);
 		CTX_REG(regs, CTX_R_PWR_CLK_STATE, GEN8_R_PWR_CLK_STATE,
-			make_rpcs(dev_priv));
+			make_rpcs(&INTEL_INFO(dev_priv)->sseu,
+				  to_intel_context(ctx, engine)->sseu));
 
 		i915_oa_init_reg_state(engine, ctx, regs);
 	}

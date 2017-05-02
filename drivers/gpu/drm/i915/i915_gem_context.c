@@ -291,6 +291,8 @@ __create_hw_context(struct drm_i915_private *dev_priv,
 		struct intel_context *ce = &ctx->__engine[n];
 
 		ce->gem_context = ctx;
+		/* Use the whole device by default */
+		ce->sseu = intel_device_default_sseu(dev_priv);
 	}
 
 	INIT_RADIX_TREE(&ctx->handles_vma, GFP_KERNEL);

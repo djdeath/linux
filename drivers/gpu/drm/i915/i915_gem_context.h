@@ -31,6 +31,7 @@
 
 #include "i915_gem.h"
 #include "i915_scheduler.h"
+#include "intel_device_info.h"
 
 struct pid;
 
@@ -160,6 +161,9 @@ struct i915_gem_context {
 		int pin_count;
 
 		const struct intel_context_ops *ops;
+
+		/** sseu: Control eu/slice partitioning */
+		struct intel_sseu sseu;
 	} __engine[I915_NUM_ENGINES];
 
 	/** ring_size: size for allocating the per-engine ring buffer */
