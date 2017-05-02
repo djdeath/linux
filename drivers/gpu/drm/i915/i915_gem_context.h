@@ -30,6 +30,7 @@
 #include <linux/radix-tree.h>
 
 #include "i915_gem.h"
+#include "intel_device_info.h"
 
 struct pid;
 
@@ -44,6 +45,13 @@ struct i915_vma;
 struct intel_ring;
 
 #define DEFAULT_CONTEXT_HANDLE 0
+
+struct i915_gem_context_sseu {
+	u8 slice_mask;
+	u8 subslice_mask;
+	u8 min_eus_per_subslice;
+	u8 max_eus_per_subslice;
+};
 
 /**
  * struct i915_gem_context - client state
@@ -160,6 +168,8 @@ struct i915_gem_context {
 		u32 *lrc_reg_state;
 		u64 lrc_desc;
 		int pin_count;
+		/** sseu: Control eu/slice partitioning */
+		struct i915_gem_context_sseu sseu;
 	} engine[I915_NUM_ENGINES];
 
 	/** ring_size: size for allocating the per-engine ring buffer */

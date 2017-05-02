@@ -260,11 +260,26 @@ static u32 default_desc_template(const struct drm_i915_private *i915,
 	return desc;
 }
 
+static struct i915_gem_context_sseu
+i915_gem_context_sseu_from_device_sseu(const struct sseu_dev_info *sseu)
+{
+	struct i915_gem_context_sseu value = {
+		.slice_mask = sseu->slice_mask,
+		.subslice_mask = sseu->subslice_mask[0],
+		.min_eus_per_subslice = sseu->max_eus_per_subslice,
+		.max_eus_per_subslice = sseu->max_eus_per_subslice,
+	};
+
+	return value;
+}
+
 static struct i915_gem_context *
 __create_hw_context(struct drm_i915_private *dev_priv,
 		    struct drm_i915_file_private *file_priv)
 {
 	struct i915_gem_context *ctx;
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
 	int ret;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
@@ -312,6 +327,13 @@ __create_hw_context(struct drm_i915_private *dev_priv,
 	 * loads it will restore whatever remap state already exists. If there
 	 * is no remap info, it will be a NOP. */
 	ctx->remap_slice = ALL_L3_SLICES(dev_priv);
+
+	/* On all engines, use the whole device by default */
+	for_each_engine(engine, dev_priv, id) {
+		ctx->engine[id].sseu =
+			i915_gem_context_sseu_from_device_sseu(
+				&INTEL_INFO(dev_priv)->sseu);
+	}
 
 	i915_gem_context_set_bannable(ctx);
 	ctx->ring_size = 4 * PAGE_SIZE;
