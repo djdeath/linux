@@ -264,6 +264,8 @@ __create_hw_context(struct drm_device *dev,
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct i915_gem_context *ctx;
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
 	int ret;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
@@ -332,6 +334,11 @@ __create_hw_context(struct drm_device *dev,
 	ctx->remap_slice = ALL_L3_SLICES(dev_priv);
 
 	ctx->hang_stats.ban_period_seconds = DRM_I915_CTX_BAN_PERIOD;
+
+	/* On all engines, use the whole device by default */
+	for_each_engine(engine, dev_priv, id)
+		ctx->engine[id].sseu = INTEL_INFO(dev_priv)->sseu;
+
 	ctx->ring_size = 4 * PAGE_SIZE;
 	ctx->desc_template = GEN8_CTX_ADDRESSING_MODE(dev_priv) <<
 			     GEN8_CTX_ADDRESSING_MODE_SHIFT;
