@@ -5128,6 +5128,7 @@ DEFINE_SIMPLE_ATTRIBUTE(i915_cache_sharing_fops,
 static void cherryview_sseu_device_status(struct drm_i915_private *dev_priv,
 					  struct sseu_dev_info *sseu)
 {
+	unsigned int min_eu_per_subslice, max_eu_per_subslice;
 	int ss_max = 2;
 	int ss;
 	u32 sig1[ss_max], sig2[ss_max];
@@ -5136,6 +5137,9 @@ static void cherryview_sseu_device_status(struct drm_i915_private *dev_priv,
 	sig1[1] = I915_READ(CHV_POWER_SS1_SIG1);
 	sig2[0] = I915_READ(CHV_POWER_SS0_SIG2);
 	sig2[1] = I915_READ(CHV_POWER_SS1_SIG2);
+
+	min_eu_per_subslice = ~0u;
+	max_eu_per_subslice = 0;
 
 	for (ss = 0; ss < ss_max; ss++) {
 		unsigned int eu_cnt;
@@ -5151,14 +5155,18 @@ static void cherryview_sseu_device_status(struct drm_i915_private *dev_priv,
 			 ((sig1[ss] & CHV_EU210_PG_ENABLE) ? 0 : 2) +
 			 ((sig2[ss] & CHV_EU311_PG_ENABLE) ? 0 : 2);
 		sseu->eu_total += eu_cnt;
-		sseu->eu_per_subslice = max_t(unsigned int,
-					      sseu->eu_per_subslice, eu_cnt);
+		min_eu_per_subslice = min(min_eu_per_subslice, eu_cnt);
+		max_eu_per_subslice = max(max_eu_per_subslice, eu_cnt);
 	}
+
+	sseu->min_eu_per_subslice = min_eu_per_subslice;
+	sseu->max_eu_per_subslice = max_eu_per_subslice;
 }
 
 static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
 				    struct sseu_dev_info *sseu)
 {
+	unsigned int min_eu_per_subslice, max_eu_per_subslice;
 	int s_max = 3, ss_max = 4;
 	int s, ss;
 	u32 s_reg[s_max], eu_reg[2*s_max], eu_mask[2];
@@ -5183,6 +5191,9 @@ static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
 		     GEN9_PGCTL_SSB_EU19_ACK |
 		     GEN9_PGCTL_SSB_EU210_ACK |
 		     GEN9_PGCTL_SSB_EU311_ACK;
+
+	min_eu_per_subslice = ~0u;
+	max_eu_per_subslice = 0;
 
 	for (s = 0; s < s_max; s++) {
 		if ((s_reg[s] & GEN9_PGCTL_SLICE_ACK) == 0)
@@ -5209,11 +5220,14 @@ static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
 			eu_cnt = 2 * hweight32(eu_reg[2*s + ss/2] &
 					       eu_mask[ss%2]);
 			sseu->eu_total += eu_cnt;
-			sseu->eu_per_subslice = max_t(unsigned int,
-						      sseu->eu_per_subslice,
-						      eu_cnt);
+
+			min_eu_per_subslice = min(min_eu_per_subslice, eu_cnt);
+			max_eu_per_subslice = max(max_eu_per_subslice, eu_cnt);
 		}
 	}
+
+	sseu->min_eu_per_subslice = min_eu_per_subslice;
+	sseu->max_eu_per_subslice = max_eu_per_subslice;
 }
 
 static void broadwell_sseu_device_status(struct drm_i915_private *dev_priv,
@@ -5226,9 +5240,11 @@ static void broadwell_sseu_device_status(struct drm_i915_private *dev_priv,
 
 	if (sseu->slice_mask) {
 		sseu->subslice_mask = INTEL_INFO(dev_priv)->sseu.subslice_mask;
-		sseu->eu_per_subslice =
-				INTEL_INFO(dev_priv)->sseu.eu_per_subslice;
-		sseu->eu_total = sseu->eu_per_subslice *
+		sseu->min_eu_per_subslice =
+			INTEL_INFO(dev_priv)->sseu.min_eu_per_subslice;
+		sseu->max_eu_per_subslice =
+			INTEL_INFO(dev_priv)->sseu.max_eu_per_subslice;
+		sseu->eu_total = sseu->max_eu_per_subslice *
 				 sseu_subslice_total(sseu);
 
 		/* subtract fused off EU(s) from enabled slice(s) */
@@ -5259,8 +5275,8 @@ static void i915_print_sseu_info(struct seq_file *m, bool is_available_info,
 		   hweight8(sseu->subslice_mask));
 	seq_printf(m, "  %s EU Total: %u\n", type,
 		   sseu->eu_total);
-	seq_printf(m, "  %s EU Per Subslice: %u\n", type,
-		   sseu->eu_per_subslice);
+	seq_printf(m, "  %s EU Per Subslice: [%u, %u]\n", type,
+		   sseu->min_eu_per_subslice, sseu->max_eu_per_subslice);
 
 	if (!is_available_info)
 		return;
