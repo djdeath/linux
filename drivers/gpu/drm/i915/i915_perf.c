@@ -350,6 +350,8 @@ struct perf_open_properties {
 	u64 single_context:1;
 	u64 ctx_handle;
 
+	bool noa_restore;
+
 	/* OA sampling state */
 	int metrics_set;
 	int oa_format;
@@ -1451,10 +1453,23 @@ static void config_oa_regs(struct drm_i915_private *dev_priv,
 	}
 }
 
+static void count_total_mux_regs(struct drm_i915_private *dev_priv)
+{
+	int i;
+
+	dev_priv->perf.oa.total_n_mux_regs = 0;
+	for (i = 0; i < dev_priv->perf.oa.n_mux_configs; i++) {
+		dev_priv->perf.oa.total_n_mux_regs +=
+			dev_priv->perf.oa.mux_regs_lens[i];
+	}
+}
+
 static int hsw_enable_metric_set(struct drm_i915_private *dev_priv)
 {
 	int ret = i915_oa_select_metric_set_hsw(dev_priv);
 	int i;
+
+	count_total_mux_regs(dev_priv);
 
 	if (ret)
 		return ret;
@@ -1779,6 +1794,8 @@ static int gen8_enable_metric_set(struct drm_i915_private *dev_priv)
 	int ret = dev_priv->perf.oa.ops.select_metric_set(dev_priv);
 	int i;
 
+	count_total_mux_regs(dev_priv);
+
 	if (ret)
 		return ret;
 
@@ -2067,6 +2084,11 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 			return ret;
 	}
 
+	if (props->noa_restore) {
+		stream->noa_restore = true;
+		atomic_inc(&dev_priv->perf.oa.noa_restore);
+	}
+
 	ret = alloc_oa_buffer(dev_priv);
 	if (ret)
 		goto err_oa_buf_alloc;
@@ -2121,6 +2143,74 @@ void i915_oa_init_reg_state(struct intel_engine_cs *engine,
 		return;
 
 	gen8_update_reg_state_unlocked(ctx, reg_state);
+}
+
+int i915_oa_emit_noa_config_locked(struct drm_i915_gem_request *req)
+{
+	struct drm_i915_private *dev_priv = req->i915;
+	int max_load = 125;
+	int n_lri, n_registers, n_loaded_register;
+	int i, j;
+	u32 *cs;
+
+	lockdep_assert_held(&dev_priv->drm.struct_mutex);
+
+	/* Perf not supported. */
+	if (!dev_priv->perf.initialized)
+		return 0;
+
+	/*
+	 * We do not expect dynamic slice/subslice configuration to change
+	 * across contexts prior to Gen8.
+	 */
+	if (INTEL_GEN(dev_priv) < 8)
+		return 0;
+
+	/* Has the user requested that NOA configuration be restored? */
+	if (!atomic_read(&dev_priv->perf.oa.noa_restore))
+		return 0;
+
+	n_registers = dev_priv->perf.oa.total_n_mux_regs;
+	n_lri = (n_registers / max_load) + (n_registers % max_load) != 0;
+
+	cs = intel_ring_begin(req,
+			      3 * 2 + /* MI_LOAD_REGISTER_IMM for chicken registers */
+			      n_lri + /* MI_LOAD_REGISTER_IMM for mux registers */
+			      n_registers * 2 + /* offset & value for mux registers*/
+			      1 /* NOOP */);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(GDT_CHICKEN_BITS);
+	*cs++ = 0xA0;
+
+	n_loaded_register = 0;
+	for (i = 0; i < dev_priv->perf.oa.n_mux_configs; i++) {
+		const struct i915_oa_reg *mux_regs =
+			dev_priv->perf.oa.mux_regs[i];
+		const int mux_regs_len = dev_priv->perf.oa.mux_regs_lens[i];
+
+		for (j = 0; j < mux_regs_len; j++) {
+			if ((n_loaded_register % max_load) == 0) {
+				n_lri = min(n_registers - n_loaded_register, max_load);
+				*cs++ = MI_LOAD_REGISTER_IMM(n_lri);
+			}
+
+			*cs++ = i915_mmio_reg_offset(mux_regs[j].addr);
+			*cs++ = mux_regs[j].value;
+			n_loaded_register++;
+		}
+	}
+
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(GDT_CHICKEN_BITS);
+	*cs++ = 0x80;
+
+	*cs++ = MI_NOOP;
+	intel_ring_advance(req, cs);
+
+	return 0;
 }
 
 /**
@@ -2435,8 +2525,13 @@ static long i915_perf_ioctl(struct file *file,
  */
 static void i915_perf_destroy_locked(struct i915_perf_stream *stream)
 {
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+
 	if (stream->enabled)
 		i915_perf_disable_locked(stream);
+
+	if (stream->noa_restore)
+		atomic_dec(&dev_priv->perf.oa.noa_restore);
 
 	if (stream->ops->destroy)
 		stream->ops->destroy(stream);
@@ -2770,6 +2865,9 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 
 			props->oa_periodic = true;
 			props->oa_period_exponent = value;
+			break;
+		case DRM_I915_PERF_PROP_NOA_RESTORE:
+			props->noa_restore = true;
 			break;
 		case DRM_I915_PERF_PROP_MAX:
 			MISSING_CASE(id);
@@ -3130,6 +3228,8 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 		INIT_LIST_HEAD(&dev_priv->perf.streams);
 		mutex_init(&dev_priv->perf.lock);
 		spin_lock_init(&dev_priv->perf.oa.oa_buffer.ptr_lock);
+
+		atomic_set(&dev_priv->perf.oa.noa_restore, 0);
 
 		oa_sample_rate_hard_limit =
 			dev_priv->perf.oa.timestamp_frequency / 2;

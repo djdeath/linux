@@ -1874,6 +1874,9 @@ gen8_emit_bb_start(struct drm_i915_gem_request *req,
 			!(dispatch_flags & I915_DISPATCH_SECURE);
 	u32 *cs;
 
+	/* Emit NOA config */
+	i915_oa_emit_noa_config_locked(req);
+
 	cs = intel_ring_begin(req, 4);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);

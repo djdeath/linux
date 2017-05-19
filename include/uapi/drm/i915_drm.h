@@ -1381,6 +1381,16 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_OA_EXPONENT,
 
+	/**
+	 * Specifying this property will alterate the behavior of the i915
+	 * driver, by forcing the driver to restore the NOA configuration of
+	 * the OA unit between context switches. You should only use this flag
+	 * if you think that that at least one application running on the
+	 * system is using a SSEU configurations with disabled
+	 * slices/subslices.
+	 */
+	DRM_I915_PERF_PROP_NOA_RESTORE,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 
