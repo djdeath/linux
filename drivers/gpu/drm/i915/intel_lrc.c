@@ -385,14 +385,17 @@ static void execlists_submit_ports(struct intel_engine_cs *engine)
 		dev_priv->regs + i915_mmio_reg_offset(RING_ELSP(engine));
 	u64 desc[2];
 
-	if (!port[0].count)
+	if (!port[0].count) {
+		i915_perf_emit_sseu_config(port[0].request);
 		execlists_context_status_change(port[0].request,
 						INTEL_CONTEXT_SCHEDULE_IN);
+	}
 	desc[0] = execlists_update_context(port[0].request);
 	engine->preempt_wa = port[0].count++; /* bdw only? fixed on skl? */
 
 	if (port[1].request) {
 		GEM_BUG_ON(port[1].count);
+		i915_perf_emit_sseu_config(port[1].request);
 		execlists_context_status_change(port[1].request,
 						INTEL_CONTEXT_SCHEDULE_IN);
 		desc[1] = execlists_update_context(port[1].request);
@@ -1504,6 +1507,9 @@ static int gen8_emit_bb_start(struct drm_i915_gem_request *req,
 
 		req->ctx->ppgtt->pd_dirty_rings &= ~intel_engine_flag(req->engine);
 	}
+
+	/* Emit NOA config */
+	i915_oa_emit_noa_config_locked(req);
 
 	ret = intel_ring_begin(req, 4);
 	if (ret)

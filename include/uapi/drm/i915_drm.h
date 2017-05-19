@@ -417,6 +417,16 @@ typedef struct drm_i915_setparam {
 	int value;
 } drm_i915_setparam_t;
 
+union drm_i915_gem_param_sseu {
+	struct {
+		__u8 slice_mask;
+		__u8 subslice_mask;
+		__u8 min_eu_per_subslice;
+		__u8 max_eu_per_subslice;
+	} packed;
+	__u64 value;
+};
+
 /* A memory manager for regions of shared memory:
  */
 #define I915_MEM_REGION_AGP 1
@@ -1282,6 +1292,11 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_OA_EXPONENT,
 
+	/**
+	 * Configure the stream to monitor sseu configuration changes.
+	 */
+	DRM_I915_PERF_PROP_SSEU_CHANGE,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 
@@ -1365,7 +1380,22 @@ enum drm_i915_perf_record_type {
 	 */
 	DRM_I915_PERF_RECORD_OA_BUFFER_LOST = 3,
 
+	/**
+	 * A change in the sseu configuration happened.
+	 *
+	 * struct {
+	 *     struct drm_i915_perf_record_header header;
+	 *     { struct drm_i915_perf_sseu_change change; } && DRM_I915_PERF_PROP_SSEU_CHANGE
+	 * };
+	 */
+	DRM_I915_PERF_RECORD_SSEU_CHANGE = 4,
+
 	DRM_I915_PERF_RECORD_MAX /* non-ABI */
+};
+
+struct drm_i915_perf_sseu_change {
+	__u32 hw_id;
+	union drm_i915_gem_param_sseu sseu;
 };
 
 #if defined(__cplusplus)

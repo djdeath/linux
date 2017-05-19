@@ -983,6 +983,27 @@ struct i915_gem_context {
 
 	u8 remap_slice;
 	bool closed:1;
+
+	/**
+	 * @oa_sseu: last SSEU configuration notified to userspace
+	 *
+	 * SSEU configuration changes are notified to userspace through the
+	 * perf infrastructure. We keep track here of the last notified
+	 * configuration for a given context since configuration can change
+	 * per engine.
+	 */
+	struct sseu_dev_info perf_sseu;
+
+	/**
+	 * @perf_enable_no: last perf enable identifier
+	 *
+	 * Userspace can enable/disable the perf infrastructure whenever it
+	 * wants without reconfiguring the OA unit. This number is updated at
+	 * the same time as @oa_sseu by copying
+	 * dev_priv->perf.oa.oa_sseu.enable_no which changes every time the
+	 * user enables the OA unit.
+	 */
+	u64 perf_enable_no;
 };
 
 enum fb_op_origin {
@@ -1909,6 +1930,12 @@ struct i915_perf_stream {
 	struct i915_gem_context *ctx;
 
 	/**
+	 * @has_sseu: Whether the stream emits SSEU configuration changes
+	 * reports.
+	 */
+	bool has_sseu;
+
+	/**
 	 * @enabled: Whether the stream is currently enabled, considering
 	 * whether the stream was opened in a disabled state and based
 	 * on `I915_PERF_IOCTL_ENABLE` and `I915_PERF_IOCTL_DISABLE` calls.
@@ -2418,6 +2445,39 @@ struct drm_i915_private {
 			const struct i915_oa_format *oa_formats;
 			int n_builtin_sets;
 		} oa;
+
+		struct {
+			/**
+			 * Buffer containing change reports of the SSEU
+			 * configuration.
+			 */
+			struct i915_vma *vma;
+			u8 *vaddr;
+
+			/**
+			 * Scheduler write to the head, and the perf driver
+			 * reads from tail.
+			 */
+			u32 head;
+			u32 tail;
+
+			/**
+			 * Is the sseu buffer enabled.
+			 */
+			bool enabled;
+
+			/**
+			 * Keeps track of how many times the OA unit has been
+			 * enabled. This number is used to discard stale
+			 * @perf_sseu in @i915_gem_context.
+			 */
+			atomic64_t enable_no;
+
+			/**
+			 * Lock writes & tail pointer updates on this buffer.
+			 */
+			spinlock_t ptr_lock;
+		} sseu_buffer;
 	} perf;
 
 	/* Abstract the submission mechanism (legacy ringbuffer or execlists) away */
@@ -3586,6 +3646,7 @@ void i915_oa_init_reg_state(struct intel_engine_cs *engine,
 			    struct i915_gem_context *ctx,
 			    uint32_t *reg_state);
 int i915_oa_emit_noa_config_locked(struct drm_i915_gem_request *req);
+void i915_perf_emit_sseu_config(struct drm_i915_gem_request *req);
 
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct i915_address_space *vm,
