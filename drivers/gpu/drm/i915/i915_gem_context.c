@@ -1111,6 +1111,9 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_CONTEXT_PARAM_SSEU:
 		args->value = intel_lr_context_get_sseu(ctx);
 		break;
+	case I915_CONTEXT_PARAM_HW_ID:
+		args->value = ctx->hw_id;
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -1173,6 +1176,9 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 			ret = -ENODEV;
 		else
 			ret = intel_lr_context_set_sseu(ctx, args->value);
+		break;
+	case I915_CONTEXT_PARAM_HW_ID:
+		ret = -EINVAL;
 		break;
 	default:
 		ret = -EINVAL;
