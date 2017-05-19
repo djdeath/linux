@@ -220,6 +220,27 @@ struct i915_gem_context {
 
 	/** remap_slice: Bitmask of cache lines that need remapping */
 	u8 remap_slice;
+
+	/**
+	 * @perf_sseu: last SSEU configuration notified to userspace
+	 *
+	 * SSEU configuration changes are notified to userspace through the
+	 * perf infrastructure. We keep track here of the last notified
+	 * configuration for a given context since configuration can change
+	 * per engine.
+	 */
+	struct sseu_dev_info perf_sseu;
+
+	/**
+	 * @perf_enable_no: last perf enable identifier
+	 *
+	 * Userspace can enable/disable the perf infrastructure whenever it
+	 * wants without reconfiguring the OA unit. This number is updated at
+	 * the same time as @perf_sseu by copying
+	 * dev_priv->perf.oa.oa_sseu.enable_no which changes every time the
+	 * user enables the OA unit.
+	 */
+	u64 perf_enable_no;
 };
 
 static inline bool i915_gem_context_is_closed(const struct i915_gem_context *ctx)

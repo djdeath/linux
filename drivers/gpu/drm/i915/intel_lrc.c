@@ -351,8 +351,10 @@ static void execlists_submit_ports(struct intel_engine_cs *engine)
 		rq = port_unpack(&port[n], &count);
 		if (rq) {
 			GEM_BUG_ON(count > !n);
-			if (!count++)
+			if (!count++) {
+				i915_perf_emit_sseu_config(rq);
 				execlists_context_status_change(rq, INTEL_CONTEXT_SCHEDULE_IN);
+			}
 			port_set(&port[n], port_pack(rq, count));
 			desc = execlists_update_context(rq);
 			GEM_DEBUG_EXEC(port[n].context_id = upper_32_bits(desc));
@@ -1406,6 +1408,9 @@ static int gen8_emit_bb_start(struct drm_i915_gem_request *req,
 
 		req->ctx->ppgtt->pd_dirty_rings &= ~intel_engine_flag(req->engine);
 	}
+
+	/* Emit NOA config */
+	i915_oa_emit_noa_config_locked(req);
 
 	cs = intel_ring_begin(req, 4);
 	if (IS_ERR(cs))

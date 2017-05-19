@@ -591,6 +591,9 @@ mi_set_context(struct drm_i915_gem_request *req, u32 flags)
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
+	/* Notify perf of possible change in SSEU configuration. */
+	i915_perf_emit_sseu_config(req);
+
 	/* WaProgramMiArbOnOffAroundMiSetContext:ivb,vlv,hsw,bdw,chv */
 	if (INTEL_GEN(dev_priv) >= 7) {
 		*cs++ = MI_ARB_ON_OFF | MI_ARB_DISABLE;

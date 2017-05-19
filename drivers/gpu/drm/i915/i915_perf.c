@@ -212,6 +212,15 @@
  */
 #define OA_BUFFER_SIZE		SZ_16M
 
+/* Dimension the SSEU buffer based on the size of the OA buffer to ensure we
+ * don't run out of space before the OA unit notifies us new data is
+ * available.
+ */
+#define SSEU_BUFFER_ITEM_SIZE	sizeof(struct perf_sseu_change)
+#define SSEU_BUFFER_SIZE	((OA_BUFFER_SIZE * SSEU_BUFFER_ITEM_SIZE) / \
+				 256 /* Maximum report size */)
+#define SSEU_BUFFER_NB_ITEM	(SSEU_BUFFER_SIZE / SSEU_BUFFER_ITEM_SIZE)
+
 #define OA_TAKEN(tail, head)	((tail - head) & (OA_BUFFER_SIZE - 1))
 
 /**
@@ -352,12 +361,27 @@ struct perf_open_properties {
 
 	bool noa_restore;
 
+	bool sseu_enable;
+
 	/* OA sampling state */
 	int metrics_set;
 	int oa_format;
 	bool oa_periodic;
 	int oa_period_exponent;
 };
+
+struct perf_sseu_change {
+	u32 timestamp;
+	struct drm_i915_perf_sseu_change change;
+};
+
+static void i915_oa_stream_disable(struct i915_perf_stream *stream);
+static void i915_oa_stream_enable(struct i915_perf_stream *stream);
+
+static bool timestamp_passed(u32 t0, u32 t1)
+{
+  return (s32)(t0 - t1) >= 0;
+}
 
 static u32 gen8_oa_hw_tail_read(struct drm_i915_private *dev_priv)
 {
@@ -571,6 +595,87 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 	return 0;
 }
 
+static int append_sseu_change(struct i915_perf_stream *stream,
+			      char __user *buf,
+			      size_t count,
+			      size_t *offset,
+			      const struct perf_sseu_change *sseu_report)
+{
+	struct drm_i915_perf_record_header header;
+
+	header.type = DRM_I915_PERF_RECORD_SSEU_CHANGE;
+	header.pad = 0;
+	header.size = sizeof(struct drm_i915_perf_record_header) +
+		sizeof(struct drm_i915_perf_sseu_change);
+
+	if ((count - *offset) < header.size)
+		return -ENOSPC;
+
+	buf += *offset;
+	if (copy_to_user(buf, &header, sizeof(header)))
+		return -EFAULT;
+	buf += sizeof(header);
+
+	if (copy_to_user(buf, &sseu_report->change,
+			 sizeof(struct drm_i915_perf_sseu_change)))
+		return -EFAULT;
+
+	(*offset) += header.size;
+
+	return 0;
+}
+
+static struct perf_sseu_change *
+sseu_buffer_peek(struct drm_i915_private *dev_priv, u32 head, u32 tail)
+{
+	if (head == tail)
+		return NULL;
+
+	return dev_priv->perf.sseu_buffer.vaddr + tail * SSEU_BUFFER_ITEM_SIZE;
+}
+
+static struct perf_sseu_change *
+sseu_buffer_advance(struct drm_i915_private *dev_priv, u32 head, u32 *tail)
+{
+	*tail = (*tail + 1) % SSEU_BUFFER_NB_ITEM;
+
+	return sseu_buffer_peek(dev_priv, head, *tail);
+}
+
+static void
+sseu_buffer_read_pointers(struct i915_perf_stream *stream, u32 *head, u32 *tail)
+{
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	if (!stream->has_sseu) {
+		*head = 0;
+		*tail = 0;
+		return;
+	}
+
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	*head = dev_priv->perf.sseu_buffer.head;
+	*tail = dev_priv->perf.sseu_buffer.tail;
+
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+}
+
+static void
+sseu_buffer_write_tail_pointer(struct i915_perf_stream *stream, u32 tail)
+{
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	if (!stream->has_sseu)
+		return;
+
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	dev_priv->perf.sseu_buffer.tail = tail;
+
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+}
+
 /**
  * Copies all buffered OA reports into userspace read() buffer.
  * @stream: An i915-perf stream opened for OA metrics
@@ -606,6 +711,8 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 	unsigned int aged_tail_idx;
 	u32 head, tail;
 	u32 taken;
+	struct perf_sseu_change *sseu_report;
+	u32 sseu_head, sseu_tail;
 	int ret = 0;
 
 	if (WARN_ON(!stream->enabled))
@@ -646,6 +753,9 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		      head, tail))
 		return -EIO;
 
+	/* Extract first SSEU report. */
+	sseu_buffer_read_pointers(stream, &sseu_head, &sseu_tail);
+	sseu_report = sseu_buffer_peek(dev_priv, sseu_head, sseu_tail);
 
 	for (/* none */;
 	     (taken = OA_TAKEN(tail, head));
@@ -684,6 +794,26 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 			if (__ratelimit(&dev_priv->perf.oa.spurious_report_rs))
 				DRM_NOTE("Skipping spurious, invalid OA report\n");
 			continue;
+		}
+
+		while (sseu_report &&
+		       !timestamp_passed(sseu_report->timestamp, report32[1])) {
+			/*
+			 * While filtering for a single context we avoid
+			 * leaking the IDs of other contexts.
+			 */
+			if (stream->ctx &&
+			    stream->ctx->hw_id != sseu_report->change.hw_id) {
+				sseu_report->change.hw_id = INVALID_CTX_ID;
+			}
+
+			ret = append_sseu_change(stream, buf, count,
+						 offset, sseu_report);
+			if (ret)
+				break;
+
+			sseu_report = sseu_buffer_advance(dev_priv, sseu_head,
+							  &sseu_tail);
 		}
 
 		/*
@@ -783,6 +913,9 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 	}
 
+	/* Update tail pointer of the sseu buffer. */
+	sseu_buffer_write_tail_pointer(stream, sseu_tail);
+
 	return ret;
 }
 
@@ -812,11 +945,28 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 			size_t *offset)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
+	bool overflow = false;
 	u32 oastatus;
 	int ret;
 
 	if (WARN_ON(!dev_priv->perf.oa.oa_buffer.vaddr))
 		return -EIO;
+
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+	overflow = dev_priv->perf.sseu_buffer.overflow;
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	if (overflow) {
+		DRM_DEBUG("SSEU buffer overflow\n");
+
+		ret = append_oa_status(stream, buf, count, offset,
+				       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+		if (ret)
+			return ret;
+
+		i915_oa_stream_disable(stream);
+		i915_oa_stream_enable(stream);
+	}
 
 	oastatus = I915_READ(GEN8_OASTATUS);
 
@@ -835,16 +985,18 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 	 * that something has gone quite badly wrong.
 	 */
 	if (oastatus & GEN8_OASTATUS_OABUFFER_OVERFLOW) {
-		ret = append_oa_status(stream, buf, count, offset,
-				       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
-		if (ret)
-			return ret;
-
 		DRM_DEBUG("OA buffer overflow (exponent = %d): force restart\n",
 			  dev_priv->perf.oa.period_exponent);
 
-		dev_priv->perf.oa.ops.oa_disable(dev_priv);
-		dev_priv->perf.oa.ops.oa_enable(dev_priv);
+		if (!overflow) {
+			ret = append_oa_status(stream, buf, count, offset,
+					       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+			if (ret)
+				return ret;
+
+			i915_oa_stream_disable(stream);
+			i915_oa_stream_enable(stream);
+		}
 
 		/*
 		 * Note: .oa_enable() is expected to re-init the oabuffer and
@@ -854,10 +1006,12 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 	}
 
 	if (oastatus & GEN8_OASTATUS_REPORT_LOST) {
-		ret = append_oa_status(stream, buf, count, offset,
-				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
-		if (ret)
-			return ret;
+		if (!overflow) {
+			ret = append_oa_status(stream, buf, count, offset,
+					       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
+			if (ret)
+				return ret;
+		}
 		I915_WRITE(GEN8_OASTATUS,
 			   oastatus & ~GEN8_OASTATUS_REPORT_LOST);
 	}
@@ -900,6 +1054,8 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 	unsigned int aged_tail_idx;
 	u32 head, tail;
 	u32 taken;
+	struct perf_sseu_change *sseu_report;
+	u32 sseu_head, sseu_tail;
 	int ret = 0;
 
 	if (WARN_ON(!stream->enabled))
@@ -937,6 +1093,9 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 		      head, tail))
 		return -EIO;
 
+	/* Extract first SSEU report. */
+	sseu_buffer_read_pointers(stream, &sseu_head, &sseu_tail);
+	sseu_report = sseu_buffer_peek(dev_priv, sseu_head, sseu_tail);
 
 	for (/* none */;
 	     (taken = OA_TAKEN(tail, head));
@@ -969,6 +1128,27 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 			continue;
 		}
 
+		/* Emit any potential sseu report. */
+		while (sseu_report &&
+		       !timestamp_passed(sseu_report->timestamp, report32[1])) {
+			/*
+			 * While filtering for a single context we avoid
+			 * leaking the IDs of other contexts.
+			 */
+			if (stream->ctx &&
+			    stream->ctx->hw_id != sseu_report->change.hw_id) {
+				sseu_report->change.hw_id = INVALID_CTX_ID;
+			}
+
+			ret = append_sseu_change(stream, buf, count,
+						 offset, sseu_report);
+			if (ret)
+				break;
+
+			sseu_report = sseu_buffer_advance(dev_priv, sseu_head,
+							  &sseu_tail);
+		}
+
 		ret = append_oa_sample(stream, buf, count, offset, report);
 		if (ret)
 			break;
@@ -998,6 +1178,9 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 		spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 	}
 
+	/* Update tail pointer of the sseu buffer. */
+	sseu_buffer_write_tail_pointer(stream, sseu_tail);
+
 	return ret;
 }
 
@@ -1023,11 +1206,28 @@ static int gen7_oa_read(struct i915_perf_stream *stream,
 			size_t *offset)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
+	bool overflow = false;
 	u32 oastatus1;
 	int ret;
 
 	if (WARN_ON(!dev_priv->perf.oa.oa_buffer.vaddr))
 		return -EIO;
+
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+	overflow = dev_priv->perf.sseu_buffer.overflow;
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	if (overflow) {
+		DRM_DEBUG("SSEU buffer overflow\n");
+
+		ret = append_oa_status(stream, buf, count, offset,
+				       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+		if (ret)
+			return ret;
+
+		i915_oa_stream_disable(stream);
+		i915_oa_stream_enable(stream);
+	}
 
 	oastatus1 = I915_READ(GEN7_OASTATUS1);
 
@@ -1059,25 +1259,30 @@ static int gen7_oa_read(struct i915_perf_stream *stream,
 	 *   now.
 	 */
 	if (unlikely(oastatus1 & GEN7_OASTATUS1_OABUFFER_OVERFLOW)) {
-		ret = append_oa_status(stream, buf, count, offset,
-				       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
-		if (ret)
-			return ret;
-
 		DRM_DEBUG("OA buffer overflow (exponent = %d): force restart\n",
 			  dev_priv->perf.oa.period_exponent);
 
-		dev_priv->perf.oa.ops.oa_disable(dev_priv);
-		dev_priv->perf.oa.ops.oa_enable(dev_priv);
+		if (!overflow) {
+			ret = append_oa_status(stream, buf, count, offset,
+					       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+			if (ret)
+				return ret;
+
+			i915_oa_stream_disable(stream);
+			i915_oa_stream_enable(stream);
+		}
 
 		oastatus1 = I915_READ(GEN7_OASTATUS1);
 	}
 
 	if (unlikely(oastatus1 & GEN7_OASTATUS1_REPORT_LOST)) {
-		ret = append_oa_status(stream, buf, count, offset,
-				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
-		if (ret)
-			return ret;
+		if (!overflow) {
+			ret = append_oa_status(stream, buf, count, offset,
+					       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
+			if (ret)
+				return ret;
+		}
+
 		dev_priv->perf.oa.gen7_latched_oastatus1 |=
 			GEN7_OASTATUS1_REPORT_LOST;
 	}
@@ -1227,18 +1432,21 @@ static void oa_put_render_ctx_id(struct i915_perf_stream *stream)
 }
 
 static void
+free_sseu_buffer(struct drm_i915_private *i915)
+{
+	i915_gem_object_unpin_map(i915->perf.sseu_buffer.vma->obj);
+	i915_vma_unpin_and_release(&i915->perf.sseu_buffer.vma);
+
+	i915->perf.sseu_buffer.vaddr = NULL;
+}
+
+static void
 free_oa_buffer(struct drm_i915_private *i915)
 {
-	mutex_lock(&i915->drm.struct_mutex);
-
 	i915_gem_object_unpin_map(i915->perf.oa.oa_buffer.vma->obj);
-	i915_vma_unpin(i915->perf.oa.oa_buffer.vma);
-	i915_gem_object_put(i915->perf.oa.oa_buffer.vma->obj);
+	i915_vma_unpin_and_release(&i915->perf.oa.oa_buffer.vma);
 
-	i915->perf.oa.oa_buffer.vma = NULL;
 	i915->perf.oa.oa_buffer.vaddr = NULL;
-
-	mutex_unlock(&i915->drm.struct_mutex);
 }
 
 static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
@@ -1255,7 +1463,14 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 
 	dev_priv->perf.oa.ops.disable_metric_set(dev_priv);
 
+	mutex_lock(&dev_priv->drm.struct_mutex);
+
+	if (stream->has_sseu)
+		free_sseu_buffer(dev_priv);
+
 	free_oa_buffer(dev_priv);
+
+	mutex_unlock(&dev_priv->drm.struct_mutex);
 
 	intel_uncore_forcewake_put(dev_priv, FORCEWAKE_ALL);
 	intel_runtime_pm_put(dev_priv);
@@ -1267,6 +1482,97 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 		DRM_NOTE("%d spurious OA report notices suppressed due to ratelimiting\n",
 			 dev_priv->perf.oa.spurious_report_rs.missed);
 	}
+}
+
+static void init_sseu_buffer(struct drm_i915_private *dev_priv,
+			     bool need_lock)
+{
+	/* Cleanup auxilliary buffer. */
+	memset(dev_priv->perf.sseu_buffer.vaddr, 0, SSEU_BUFFER_SIZE);
+
+	atomic64_inc(&dev_priv->perf.sseu_buffer.enable_no);
+
+	if (need_lock)
+		spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	/* Initialize head & tail pointers. */
+	dev_priv->perf.sseu_buffer.head = 0;
+	dev_priv->perf.sseu_buffer.tail = 0;
+	dev_priv->perf.sseu_buffer.overflow = false;
+
+	if (need_lock)
+		spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+}
+
+static int alloc_sseu_buffer(struct drm_i915_private *dev_priv)
+{
+	struct drm_i915_gem_object *bo;
+	struct i915_vma *vma;
+	int ret = 0;
+
+	bo = i915_gem_object_create(dev_priv, SSEU_BUFFER_SIZE);
+	if (IS_ERR(bo)) {
+		DRM_ERROR("Failed to allocate SSEU buffer\n");
+		ret = PTR_ERR(bo);
+		goto out;
+	}
+
+	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, SSEU_BUFFER_SIZE, 0);
+	if (IS_ERR(vma)) {
+		ret = PTR_ERR(vma);
+		goto err_unref;
+	}
+	dev_priv->perf.sseu_buffer.vma = vma;
+
+	dev_priv->perf.sseu_buffer.vaddr =
+		i915_gem_object_pin_map(bo, I915_MAP_WB);
+	if (IS_ERR(dev_priv->perf.sseu_buffer.vaddr)) {
+		ret = PTR_ERR(dev_priv->perf.sseu_buffer.vaddr);
+		goto err_unpin;
+	}
+
+	atomic64_set(&dev_priv->perf.sseu_buffer.enable_no, 0);
+
+	init_sseu_buffer(dev_priv, true);
+
+	DRM_DEBUG_DRIVER("OA SSEU Buffer initialized, gtt offset = 0x%x, vaddr = %p\n",
+			 i915_ggtt_offset(dev_priv->perf.sseu_buffer.vma),
+			 dev_priv->perf.sseu_buffer.vaddr);
+
+	goto out;
+
+err_unpin:
+	__i915_vma_unpin(vma);
+
+err_unref:
+	i915_gem_object_put(bo);
+
+	dev_priv->perf.sseu_buffer.vaddr = NULL;
+	dev_priv->perf.sseu_buffer.vma = NULL;
+
+out:
+	return ret;
+}
+
+static void sseu_enable(struct drm_i915_private *dev_priv)
+{
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	init_sseu_buffer(dev_priv, false);
+
+	dev_priv->perf.sseu_buffer.enabled = true;
+
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+}
+
+static void sseu_disable(struct drm_i915_private *dev_priv)
+{
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	dev_priv->perf.sseu_buffer.enabled = false;
+	dev_priv->perf.sseu_buffer.overflow = false;
+
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
 }
 
 static void gen7_init_oa_buffer(struct drm_i915_private *dev_priv)
@@ -1765,6 +2071,9 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 		struct intel_context *ce = &ctx->engine[RCS];
 		u32 *regs;
 
+		memset(&ctx->perf_sseu, 0, sizeof(ctx->perf_sseu));
+		ctx->perf_enable_no = 0;
+
 		/* OA settings will be set upon first use */
 		if (!ce->state)
 			continue;
@@ -1929,6 +2238,9 @@ static void i915_oa_stream_enable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 
+	if (stream->has_sseu)
+		sseu_enable(dev_priv);
+
 	dev_priv->perf.oa.ops.oa_enable(dev_priv);
 
 	if (dev_priv->perf.oa.periodic)
@@ -1958,6 +2270,9 @@ static void gen8_oa_disable(struct drm_i915_private *dev_priv)
 static void i915_oa_stream_disable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	if (stream->has_sseu)
+		sseu_disable(dev_priv);
 
 	dev_priv->perf.oa.ops.oa_disable(dev_priv);
 
@@ -2089,6 +2404,14 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		atomic_inc(&dev_priv->perf.oa.noa_restore);
 	}
 
+	if (props->sseu_enable) {
+		ret = alloc_sseu_buffer(dev_priv);
+		if (ret)
+			goto err_sseu_buf_alloc;
+
+		stream->has_sseu = true;
+	}
+
 	ret = alloc_oa_buffer(dev_priv);
 	if (ret)
 		goto err_oa_buf_alloc;
@@ -2121,6 +2444,9 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 err_enable:
 	intel_uncore_forcewake_put(dev_priv, FORCEWAKE_ALL);
 	intel_runtime_pm_put(dev_priv);
+	free_sseu_buffer(dev_priv);
+
+err_sseu_buf_alloc:
 	free_oa_buffer(dev_priv);
 
 err_oa_buf_alloc:
@@ -2211,6 +2537,69 @@ int i915_oa_emit_noa_config_locked(struct drm_i915_gem_request *req)
 	intel_ring_advance(req, cs);
 
 	return 0;
+}
+
+/**
+ * i915_perf_emit_sseu_config - emit the SSEU configuration of a gem request
+ * @req: the request
+ *
+ * If the OA unit is enabled, the write the SSEU configuration of a
+ * given request into a circular buffer. The buffer is read at the
+ * same time as the OA buffer and its elements are inserted into the
+ * perf stream to notify the userspace of SSEU configuration changes.
+ * This is needed to interpret values from the OA reports.
+ */
+void i915_perf_emit_sseu_config(struct drm_i915_gem_request *req)
+{
+	struct drm_i915_private *dev_priv = req->i915;
+	struct perf_sseu_change *report;
+	const struct sseu_dev_info *sseu;
+	u32 head, timestamp;
+	u64 perf_enable_no;
+
+	/* Perf not supported. */
+	if (!dev_priv->perf.initialized)
+		return;
+
+	/* Nothing's changed, no need to signal userspace. */
+	sseu = &req->ctx->engine[req->engine->id].sseu;
+	perf_enable_no = atomic64_read(&dev_priv->perf.sseu_buffer.enable_no);
+	if (perf_enable_no == req->ctx->perf_enable_no &&
+	    memcmp(&req->ctx->perf_sseu, sseu, sizeof(*sseu)) == 0)
+		return;
+
+	memcpy(&req->ctx->perf_sseu, sseu, sizeof(*sseu));
+	req->ctx->perf_enable_no = perf_enable_no;
+
+	/* Read the timestamp outside the spin lock. */
+	timestamp = I915_READ(RING_TIMESTAMP(RENDER_RING_BASE));
+
+	spin_lock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
+
+	if (!dev_priv->perf.sseu_buffer.enabled)
+		goto out;
+
+	head = dev_priv->perf.sseu_buffer.head;
+	dev_priv->perf.sseu_buffer.head =
+		(dev_priv->perf.sseu_buffer.head + 1) % SSEU_BUFFER_NB_ITEM;
+
+	/* This should never happen, unless we've wrongly dimensioned the SSEU
+	 * buffer. */
+	if (dev_priv->perf.sseu_buffer.head == dev_priv->perf.sseu_buffer.tail) {
+		dev_priv->perf.sseu_buffer.overflow = true;
+		goto out;
+	}
+
+	report = dev_priv->perf.sseu_buffer.vaddr + head * SSEU_BUFFER_ITEM_SIZE;
+	memset(report, 0, sizeof(*report));
+
+	report->timestamp = I915_READ(RING_TIMESTAMP(RENDER_RING_BASE));
+	report->change.hw_id = req->ctx->hw_id;
+	report->change.slice_mask = sseu->slice_mask;
+	report->change.subslice_mask = sseu->subslice_mask;
+
+out:
+	spin_unlock_irq(&dev_priv->perf.sseu_buffer.ptr_lock);
 }
 
 /**
@@ -2869,6 +3258,9 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 		case DRM_I915_PERF_PROP_NOA_RESTORE:
 			props->noa_restore = true;
 			break;
+		case DRM_I915_PERF_PROP_SSEU_CHANGE:
+			props->sseu_enable = true;
+			break;
 		case DRM_I915_PERF_PROP_MAX:
 			MISSING_CASE(id);
 			return -EINVAL;
@@ -3230,6 +3622,10 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 		spin_lock_init(&dev_priv->perf.oa.oa_buffer.ptr_lock);
 
 		atomic_set(&dev_priv->perf.oa.noa_restore, 0);
+
+		spin_lock_init(&dev_priv->perf.sseu_buffer.ptr_lock);
+		dev_priv->perf.sseu_buffer.enabled = false;
+		atomic64_set(&dev_priv->perf.sseu_buffer.enable_no, 0);
 
 		oa_sample_rate_hard_limit =
 			dev_priv->perf.oa.timestamp_frequency / 2;
