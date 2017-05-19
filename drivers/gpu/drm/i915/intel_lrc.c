@@ -2299,3 +2299,71 @@ void intel_lr_context_resume(struct drm_i915_private *dev_priv)
 		}
 	}
 }
+
+int intel_lr_context_set_sseu(struct i915_gem_context *ctx, u64 value)
+{
+	union drm_i915_gem_param_sseu user = { .value = value };
+	struct drm_i915_private *i915 = ctx->i915;
+	struct intel_context *ce = &ctx->engine[RCS];
+	struct sseu_dev_info sseu = ctx->engine[RCS].sseu;
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+	int ret;
+
+	lockdep_assert_held(&i915->drm.struct_mutex);
+
+	sseu.slice_mask =
+		user.packed.slice_mask & INTEL_INFO(i915)->sseu.slice_mask;
+	sseu.subslice_mask =
+		user.packed.subslice_mask & INTEL_INFO(i915)->sseu.subslice_mask;
+	sseu.min_eu_per_subslice =
+		max(user.packed.min_eu_per_subslice,
+		    INTEL_INFO(i915)->sseu.min_eu_per_subslice);
+	sseu.max_eu_per_subslice =
+		min(user.packed.max_eu_per_subslice,
+		    INTEL_INFO(i915)->sseu.max_eu_per_subslice);
+
+	if (memcmp(&sseu, &ctx->engine[RCS].sseu, sizeof(sseu)) == 0)
+		return 0;
+
+	if (ce->pin_count) { /* Assume that the context is active! */
+		ret = i915_gem_switch_to_kernel_context(i915);
+		if (ret)
+			return ret;
+
+		ret = i915_gem_wait_for_idle(i915,
+					     I915_WAIT_INTERRUPTIBLE |
+					     I915_WAIT_LOCKED);
+		if (ret)
+			return ret;
+	}
+
+	if (ce->state) {
+		u32 *regs;
+
+		regs = i915_gem_object_pin_map(ce->state->obj, I915_MAP_WB);
+		if (IS_ERR(regs))
+			return PTR_ERR(regs);
+
+		regs[CTX_R_PWR_CLK_STATE + 1] = make_rpcs(&sseu);
+		i915_gem_object_unpin_map(ce->state->obj);
+	}
+
+	for_each_engine(engine, i915, id)
+		ctx->engine[id].sseu = sseu;
+
+	return 0;
+}
+
+u64 intel_lr_context_get_sseu(struct i915_gem_context *ctx)
+{
+	union drm_i915_gem_param_sseu user;
+	const struct sseu_dev_info *sseu = &ctx->engine[RCS].sseu;
+
+	user.packed.slice_mask = sseu->slice_mask;
+	user.packed.subslice_mask = sseu->subslice_mask;
+	user.packed.min_eu_per_subslice = sseu->min_eu_per_subslice;
+	user.packed.max_eu_per_subslice = sseu->max_eu_per_subslice;
+
+	return user.value;
+}

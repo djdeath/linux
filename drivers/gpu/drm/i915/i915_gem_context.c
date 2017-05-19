@@ -1108,6 +1108,9 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_CONTEXT_PARAM_NO_ERROR_CAPTURE:
 		args->value = !!(ctx->flags & CONTEXT_NO_ERROR_CAPTURE);
 		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		args->value = intel_lr_context_get_sseu(ctx);
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -1162,6 +1165,14 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 			else
 				ctx->flags &= ~CONTEXT_NO_ERROR_CAPTURE;
 		}
+		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		if (args->size)
+			ret = -EINVAL;
+		else if (!i915.enable_execlists)
+			ret = -ENODEV;
+		else
+			ret = intel_lr_context_set_sseu(ctx, args->value);
 		break;
 	default:
 		ret = -EINVAL;
