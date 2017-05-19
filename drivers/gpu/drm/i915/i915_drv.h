@@ -2325,6 +2325,7 @@ struct drm_i915_private {
 			const struct i915_oa_reg *mux_regs[6];
 			int mux_regs_lens[6];
 			int n_mux_configs;
+			int total_n_mux_regs;
 
 			const struct i915_oa_reg *b_counter_regs;
 			int b_counter_regs_len;
@@ -3584,6 +3585,7 @@ int i915_perf_open_ioctl(struct drm_device *dev, void *data,
 void i915_oa_init_reg_state(struct intel_engine_cs *engine,
 			    struct i915_gem_context *ctx,
 			    uint32_t *reg_state);
+int i915_oa_emit_noa_config_locked(struct drm_i915_gem_request *req);
 
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct i915_address_space *vm,

@@ -2326,6 +2326,9 @@ gen8_emit_bb_start(struct drm_i915_gem_request *req,
 			!(dispatch_flags & I915_DISPATCH_SECURE);
 	int ret;
 
+	/* Emit NOA config */
+	i915_oa_emit_noa_config_locked(req);
+
 	ret = intel_ring_begin(req, 4);
 	if (ret)
 		return ret;
