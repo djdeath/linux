@@ -456,6 +456,10 @@ struct intel_engine_cs {
 	void		(*emit_breadcrumb)(struct i915_request *rq, u32 *cs);
 	int		emit_breadcrumb_sz;
 
+	int		(*emit_rpcs_config)(struct i915_request *rq,
+					    struct i915_gem_context *ctx,
+					    struct intel_sseu sseu);
+
 	/* Pass the request to the hardware queue (e.g. directly into
 	 * the legacy ringbuffer or to the end of an execlist).
 	 *

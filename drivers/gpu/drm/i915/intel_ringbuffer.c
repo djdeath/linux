@@ -2082,6 +2082,8 @@ static void intel_ring_default_vfuncs(struct drm_i915_private *dev_priv,
 			engine->emit_breadcrumb_sz++;
 	}
 
+	engine->emit_rpcs_config = NULL; /* Only supported on Gen8+ */
+
 	engine->set_default_submission = i9xx_set_default_submission;
 
 	if (INTEL_GEN(dev_priv) >= 6)

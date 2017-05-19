@@ -2276,6 +2276,92 @@ static void gen8_emit_breadcrumb_rcs(struct i915_request *request, u32 *cs)
 }
 static const int gen8_emit_breadcrumb_rcs_sz = 8 + WA_TAIL_DWORDS;
 
+u32 gen8_make_rpcs(const struct sseu_dev_info *sseu,
+		   struct intel_sseu ctx_sseu)
+{
+	u32 rpcs = 0;
+
+	/*
+	 * Starting in Gen9, render power gating can leave
+	 * slice/subslice/EU in a partially enabled state. We
+	 * must make an explicit request through RPCS for full
+	 * enablement.
+	 */
+	if (sseu->has_slice_pg) {
+		rpcs |= GEN8_RPCS_S_CNT_ENABLE;
+		rpcs |= hweight8(ctx_sseu.slice_mask) << GEN8_RPCS_S_CNT_SHIFT;
+		rpcs |= GEN8_RPCS_ENABLE;
+	}
+
+	if (sseu->has_subslice_pg) {
+		rpcs |= GEN8_RPCS_SS_CNT_ENABLE;
+		rpcs |= hweight8(ctx_sseu.subslice_mask) <<
+			GEN8_RPCS_SS_CNT_SHIFT;
+		rpcs |= GEN8_RPCS_ENABLE;
+	}
+
+	if (sseu->has_eu_pg) {
+		rpcs |= ctx_sseu.min_eus_per_subslice <<
+			GEN8_RPCS_EU_MIN_SHIFT;
+		rpcs |= ctx_sseu.max_eus_per_subslice <<
+			GEN8_RPCS_EU_MAX_SHIFT;
+		rpcs |= GEN8_RPCS_ENABLE;
+	}
+
+	return rpcs;
+}
+
+static int gen8_emit_rpcs_config(struct i915_request *rq,
+				 struct i915_gem_context *ctx,
+				 struct intel_sseu sseu)
+{
+	struct drm_i915_private *i915 = rq->i915;
+	struct intel_context *ce = to_intel_context(ctx, i915->engine[RCS]);
+	struct i915_hw_ppgtt *ppgtt;
+	struct i915_vma *vma;
+	u64 offset;
+	u32 *cs;
+	int err;
+
+	/* Let the deferred state allocation take care of this. */
+	if (!ce->state)
+		return 0;
+
+	ppgtt = ctx->i915->kernel_context->ppgtt ?:
+		ctx->i915->mm.aliasing_ppgtt;
+
+	vma = i915_vma_instance(ce->state->obj, &ppgtt->base, NULL);
+	if (IS_ERR(vma))
+		return PTR_ERR(vma);
+
+	err = i915_vma_pin(vma, 0, GEN8_LR_CONTEXT_ALIGN, PIN_USER);
+	if (err) {
+		i915_vma_close(vma);
+		return err;
+	}
+
+	i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
+	i915_vma_unpin(vma);
+
+	cs = intel_ring_begin(rq, 4);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	offset = vma->node.start +
+		LRC_STATE_PN * PAGE_SIZE +
+		(CTX_R_PWR_CLK_STATE + 1) * 4;
+
+	*cs++ = MI_STORE_DWORD_IMM_GEN4;
+	*cs++ = lower_32_bits(offset);
+	*cs++ = upper_32_bits(offset);
+	*cs++ = gen8_make_rpcs(&INTEL_INFO(i915)->sseu,
+			       intel_engine_prepare_sseu(rq->engine, sseu));
+
+	intel_ring_advance(rq, cs);
+
+	return 0;
+}
+
 static int gen8_init_rcs_context(struct i915_request *rq)
 {
 	int ret;
@@ -2368,6 +2454,8 @@ logical_ring_default_vfuncs(struct intel_engine_cs *engine)
 	engine->emit_flush = gen8_emit_flush;
 	engine->emit_breadcrumb = gen8_emit_breadcrumb;
 	engine->emit_breadcrumb_sz = gen8_emit_breadcrumb_sz;
+
+	engine->emit_rpcs_config = gen8_emit_rpcs_config;
 
 	engine->set_default_submission = execlists_set_default_submission;
 
@@ -2517,41 +2605,6 @@ int logical_xcs_ring_init(struct intel_engine_cs *engine)
 	logical_ring_setup(engine);
 
 	return logical_ring_init(engine);
-}
-
-u32 gen8_make_rpcs(const struct sseu_dev_info *sseu,
-		   struct intel_sseu ctx_sseu)
-{
-	u32 rpcs = 0;
-
-	/*
-	 * Starting in Gen9, render power gating can leave
-	 * slice/subslice/EU in a partially enabled state. We
-	 * must make an explicit request through RPCS for full
-	 * enablement.
-	*/
-	if (sseu->has_slice_pg) {
-		rpcs |= GEN8_RPCS_S_CNT_ENABLE;
-		rpcs |= hweight8(ctx_sseu.slice_mask) << GEN8_RPCS_S_CNT_SHIFT;
-		rpcs |= GEN8_RPCS_ENABLE;
-	}
-
-	if (sseu->has_subslice_pg) {
-		rpcs |= GEN8_RPCS_SS_CNT_ENABLE;
-		rpcs |= hweight8(ctx_sseu.subslice_mask) <<
-			GEN8_RPCS_SS_CNT_SHIFT;
-		rpcs |= GEN8_RPCS_ENABLE;
-	}
-
-	if (sseu->has_eu_pg) {
-		rpcs |= ctx_sseu.min_eus_per_subslice <<
-			GEN8_RPCS_EU_MIN_SHIFT;
-		rpcs |= ctx_sseu.max_eus_per_subslice <<
-			GEN8_RPCS_EU_MAX_SHIFT;
-		rpcs |= GEN8_RPCS_ENABLE;
-	}
-
-	return rpcs;
 }
 
 static u32 intel_lr_indirect_ctx_offset(struct intel_engine_cs *engine)

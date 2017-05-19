@@ -790,6 +790,79 @@ out:
 	return 0;
 }
 
+static int
+intel_sseu_from_user_sseu(const struct sseu_dev_info *sseu,
+			  const struct drm_i915_gem_context_param_sseu *user_sseu,
+			  struct intel_sseu *ctx_sseu)
+{
+	if ((user_sseu->slice_mask & ~sseu->slice_mask) != 0 ||
+	    user_sseu->slice_mask == 0)
+		return -EINVAL;
+
+	if ((user_sseu->subslice_mask & ~sseu->subslice_mask[0]) != 0 ||
+	    user_sseu->subslice_mask == 0)
+		return -EINVAL;
+
+	if (user_sseu->min_eus_per_subslice > sseu->max_eus_per_subslice)
+		return -EINVAL;
+
+	if (user_sseu->max_eus_per_subslice > sseu->max_eus_per_subslice ||
+	    user_sseu->max_eus_per_subslice < user_sseu->min_eus_per_subslice ||
+	    user_sseu->max_eus_per_subslice == 0)
+		return -EINVAL;
+
+	ctx_sseu->slice_mask = user_sseu->slice_mask;
+	ctx_sseu->subslice_mask = user_sseu->subslice_mask;
+	ctx_sseu->min_eus_per_subslice = user_sseu->min_eus_per_subslice;
+	ctx_sseu->max_eus_per_subslice = user_sseu->max_eus_per_subslice;
+
+	return 0;
+}
+
+static int
+i915_gem_context_reconfigure_sseu(struct i915_gem_context *ctx,
+				  struct intel_engine_cs *engine,
+				  struct intel_sseu sseu)
+{
+	struct drm_i915_private *i915 = ctx->i915;
+	struct i915_request *rq;
+	struct intel_ring *ring;
+	int ret;
+
+	lockdep_assert_held(&i915->drm.struct_mutex);
+
+	i915_retire_requests(i915);
+
+	/* Now use the RCS to actually reconfigure. */
+	engine = i915->engine[RCS];
+
+	rq = i915_request_alloc(engine, i915->kernel_context);
+	if (IS_ERR(rq))
+		return PTR_ERR(rq);
+
+	ret = engine->emit_rpcs_config(rq, ctx, sseu);
+	if (ret) {
+		__i915_request_add(rq, true);
+		return ret;
+	}
+
+	/* Queue this switch after all other activity */
+	list_for_each_entry(ring, &i915->gt.active_rings, active_link) {
+		struct i915_request *prev;
+
+		prev = last_request_on_engine(ring->timeline, engine);
+		if (prev)
+			i915_sw_fence_await_sw_fence_gfp(&rq->submit,
+							 &prev->submit,
+							 I915_FENCE_GFP);
+	}
+
+	i915_gem_set_global_barrier(i915, rq);
+	__i915_request_add(rq, true);
+
+	return 0;
+}
+
 int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 				    struct drm_file *file)
 {
@@ -827,6 +900,46 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_CONTEXT_PARAM_PRIORITY:
 		args->value = ctx->sched.priority;
 		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		{
+			struct drm_i915_gem_context_param_sseu user_sseu;
+			struct intel_engine_cs *engine;
+			struct intel_context *ce;
+
+			if (copy_from_user(&user_sseu,
+					   u64_to_user_ptr(args->value),
+					   sizeof(user_sseu))) {
+				ret = -EFAULT;
+				break;
+			}
+
+			if (user_sseu.rsvd1 != 0 || user_sseu.rsvd2 != 0) {
+				ret = -EINVAL;
+				break;
+			}
+
+			engine = intel_engine_lookup_user(to_i915(dev),
+							  user_sseu.class,
+							  user_sseu.instance);
+			if (!engine) {
+				ret = -EINVAL;
+				break;
+			}
+
+			ce = to_intel_context(ctx, engine);
+
+			user_sseu.slice_mask = ce->sseu.slice_mask;
+			user_sseu.subslice_mask = ce->sseu.subslice_mask;
+			user_sseu.min_eus_per_subslice =
+				ce->sseu.min_eus_per_subslice;
+			user_sseu.max_eus_per_subslice =
+				ce->sseu.max_eus_per_subslice;
+
+			if (copy_to_user(u64_to_user_ptr(args->value),
+					 &user_sseu, sizeof(user_sseu)))
+				ret = -EFAULT;
+			break;
+		}
 	default:
 		ret = -EINVAL;
 		break;
@@ -901,7 +1014,70 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 				ctx->sched.priority = priority;
 		}
 		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		{
+			struct drm_i915_private *i915 = to_i915(dev);
+			struct drm_i915_gem_context_param_sseu user_sseu;
+			struct intel_engine_cs *engine;
+			struct intel_sseu ctx_sseu;
+			enum intel_engine_id id;
 
+			if (args->size) {
+				ret = -EINVAL;
+				break;
+			}
+
+			if (copy_from_user(&user_sseu, u64_to_user_ptr(args->value),
+					   sizeof(user_sseu))) {
+				ret = -EFAULT;
+				break;
+			}
+
+			if (user_sseu.rsvd1 != 0 || user_sseu.rsvd2 != 0) {
+				ret = -EINVAL;
+				break;
+			}
+
+			engine = intel_engine_lookup_user(i915,
+							  user_sseu.class,
+							  user_sseu.instance);
+			if (!engine) {
+				ret = -EINVAL;
+				break;
+			}
+
+			if (!engine->emit_rpcs_config) {
+				ret = -ENODEV;
+				break;
+			}
+
+			ret = intel_sseu_from_user_sseu(&INTEL_INFO(i915)->sseu,
+							&user_sseu, &ctx_sseu);
+			if (ret)
+				break;
+
+			if (memcmp(&to_intel_context(ctx, engine)->sseu,
+				   &ctx_sseu, sizeof(ctx_sseu)) != 0) {
+				DRM_ERROR("reconfiguring ctx=%p\n", ctx);
+				ret = i915_gem_context_reconfigure_sseu(ctx,
+									engine,
+									ctx_sseu);
+				if (ret)
+					break;
+			}
+
+			/*
+			 * Apply the configuration to all engine. Our hardware
+			 * doesn't currently support different configurations
+			 * for each engine.
+			 */
+			for_each_engine(engine, i915, id) {
+				struct intel_context *ce = to_intel_context(ctx, engine);
+
+				ce->sseu = ctx_sseu;
+			}
+		}
+		break;
 	default:
 		ret = -EINVAL;
 		break;

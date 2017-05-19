@@ -2069,6 +2069,12 @@ struct drm_i915_private {
 		u32 request_serial;
 
 		/**
+		 * Global barrier to ensuring ordering of sseu transitions
+		 * requests.
+		 */
+		struct i915_gem_active global_barrier;
+
+		/**
 		 * Is the GPU currently considered idle, or busy executing
 		 * userspace requests? Whilst idle, we allow runtime power
 		 * management to power down the hardware and display clocks.
@@ -3214,6 +3220,13 @@ static inline struct i915_hw_ppgtt *
 i915_vm_to_ppgtt(struct i915_address_space *vm)
 {
 	return container_of(vm, struct i915_hw_ppgtt, base);
+}
+
+static inline void i915_gem_set_global_barrier(struct drm_i915_private *i915,
+					       struct i915_request *rq)
+{
+	lockdep_assert_held(&i915->drm.struct_mutex);
+	i915_gem_active_set(&i915->gt.global_barrier, rq);
 }
 
 /* i915_gem_fence_reg.c */
