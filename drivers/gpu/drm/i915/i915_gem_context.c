@@ -734,6 +734,26 @@ out:
 	return 0;
 }
 
+static struct i915_gem_context_sseu
+i915_gem_context_sseu_from_user_sseu(const struct sseu_dev_info *sseu,
+				     const struct drm_i915_gem_context_param_sseu *user_sseu)
+{
+	struct i915_gem_context_sseu value = {
+		.slice_mask = user_sseu->packed.slice_mask == 0 ?
+			      sseu->slice_mask :
+			      (user_sseu->packed.slice_mask & sseu->slice_mask),
+		.subslice_mask = user_sseu->packed.subslice_mask == 0 ?
+				 sseu->subslice_mask[0] :
+				 (user_sseu->packed.subslice_mask & sseu->subslice_mask[0]),
+		.min_eus_per_subslice = min(user_sseu->packed.min_eus_per_subslice,
+					    sseu->max_eus_per_subslice),
+		.max_eus_per_subslice = min(user_sseu->packed.max_eus_per_subslice,
+					    sseu->max_eus_per_subslice),
+	};
+
+	return value;
+}
+
 int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 				    struct drm_file *file)
 {
@@ -771,6 +791,37 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_CONTEXT_PARAM_PRIORITY:
 		args->value = ctx->priority;
 		break;
+	case I915_CONTEXT_PARAM_SSEU: {
+		struct drm_i915_gem_context_param_sseu param_sseu;
+		struct intel_engine_cs *engine;
+
+		if (copy_from_user(&param_sseu, u64_to_user_ptr(args->value),
+				   sizeof(param_sseu))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		engine = i915_gem_engine_from_flags(to_i915(dev), file,
+						    param_sseu.flags);
+		if (!engine) {
+			ret = -EINVAL;
+			break;
+		}
+
+		param_sseu.packed.slice_mask =
+			ctx->engine[engine->id].sseu.slice_mask;
+		param_sseu.packed.subslice_mask =
+			ctx->engine[engine->id].sseu.subslice_mask;
+		param_sseu.packed.min_eus_per_subslice =
+			ctx->engine[engine->id].sseu.min_eus_per_subslice;
+		param_sseu.packed.max_eus_per_subslice =
+			ctx->engine[engine->id].sseu.max_eus_per_subslice;
+
+		if (copy_to_user(u64_to_user_ptr(args->value), &param_sseu,
+				 sizeof(param_sseu)))
+			ret = -EFAULT;
+		break;
+	}
 	default:
 		ret = -EINVAL;
 		break;
@@ -826,7 +877,6 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 		else
 			i915_gem_context_clear_bannable(ctx);
 		break;
-
 	case I915_CONTEXT_PARAM_PRIORITY:
 		{
 			s64 priority = args->value;
@@ -845,7 +895,37 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 				ctx->priority = priority;
 		}
 		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		if (args->size)
+			ret = -EINVAL;
+		else if (!HAS_EXECLISTS(ctx->i915))
+			ret = -ENODEV;
+		else {
+			struct drm_i915_private *dev_priv = to_i915(dev);
+			struct drm_i915_gem_context_param_sseu user_sseu;
+			struct i915_gem_context_sseu ctx_sseu;
+			struct intel_engine_cs *engine;
 
+			if (copy_from_user(&user_sseu, u64_to_user_ptr(args->value),
+					   sizeof(user_sseu))) {
+				ret = -EFAULT;
+				break;
+			}
+
+			engine = i915_gem_engine_from_flags(dev_priv, file,
+							    user_sseu.flags);
+			if (!engine) {
+				ret = -EINVAL;
+				break;
+			}
+
+			ctx_sseu =
+				i915_gem_context_sseu_from_user_sseu(&INTEL_INFO(dev_priv)->sseu,
+								     &user_sseu);
+
+			ret = intel_lr_context_set_sseu(ctx, engine, &ctx_sseu);
+		}
+		break;
 	default:
 		ret = -EINVAL;
 		break;

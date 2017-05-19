@@ -2637,3 +2637,58 @@ void intel_lr_context_resume(struct drm_i915_private *dev_priv)
 		}
 	}
 }
+
+int intel_lr_context_set_sseu(struct i915_gem_context *ctx,
+			      struct intel_engine_cs *engine,
+			      struct i915_gem_context_sseu *sseu)
+{
+	struct drm_i915_private *dev_priv = ctx->i915;
+	struct intel_context *ce;
+	enum intel_engine_id id;
+	int ret;
+
+	lockdep_assert_held(&dev_priv->drm.struct_mutex);
+
+	if (memcmp(sseu, &ctx->engine[engine->id].sseu, sizeof(*sseu)) == 0)
+		return 0;
+
+	/*
+	 * We can only program this on render ring.
+	 */
+	ce = &ctx->engine[RCS];
+
+	if (ce->pin_count) { /* Assume that the context is active! */
+		ret = i915_gem_switch_to_kernel_context(dev_priv);
+		if (ret)
+			return ret;
+
+		ret = i915_gem_wait_for_idle(dev_priv,
+					     I915_WAIT_INTERRUPTIBLE |
+					     I915_WAIT_LOCKED);
+		if (ret)
+			return ret;
+	}
+
+	if (ce->state) {
+		void *vaddr = i915_gem_object_pin_map(ce->state->obj, I915_MAP_WB);
+		u32 *regs;
+
+		if (IS_ERR(vaddr))
+			return PTR_ERR(vaddr);
+
+		regs = vaddr + LRC_STATE_PN * PAGE_SIZE;
+
+		regs[CTX_R_PWR_CLK_STATE + 1] =
+			make_rpcs(&INTEL_INFO(dev_priv)->sseu, sseu);
+		i915_gem_object_unpin_map(ce->state->obj);
+	}
+
+	/*
+	 * Apply the configuration to all engine. Our hardware doesn't
+	 * currently support different configurations for each engine.
+	 */
+	for_each_engine(engine, dev_priv, id)
+		ctx->engine[id].sseu = *sseu;
+
+	return 0;
+}

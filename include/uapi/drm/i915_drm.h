@@ -1456,7 +1456,35 @@ struct drm_i915_gem_context_param {
 #define   I915_CONTEXT_MAX_USER_PRIORITY	1023 /* inclusive */
 #define   I915_CONTEXT_DEFAULT_PRIORITY		0
 #define   I915_CONTEXT_MIN_USER_PRIORITY	-1023 /* inclusive */
+	/*
+	 * When using the following param, value should be a pointer to
+	 * drm_i915_gem_context_param_sseu.
+	 */
+#define I915_CONTEXT_PARAM_SSEU		0x7
 	__u64 value;
+};
+
+struct drm_i915_gem_context_param_sseu {
+	/*
+	 * Engine to be configured or queried. Same value you would use with
+	 * drm_i915_gem_execbuffer2.
+	 */
+	__u64 flags;
+
+	/*
+	 * Setting slice_mask or subslice_mask to 0 will make the context use
+	 * masks reported respectively by I915_PARAM_SLICE_MASK or
+	 * I915_PARAM_SUBSLICE_MASK.
+	 */
+	union {
+		struct {
+			__u8 slice_mask;
+			__u8 subslice_mask;
+			__u8 min_eus_per_subslice;
+			__u8 max_eus_per_subslice;
+		} packed;
+		__u64 value;
+	};
 };
 
 enum drm_i915_oa_format {
