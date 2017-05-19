@@ -1090,6 +1090,9 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_CONTEXT_PARAM_BANNABLE:
 		args->value = i915_gem_context_is_bannable(ctx);
 		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		args->value = intel_lr_context_get_sseu(ctx);
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -1144,6 +1147,14 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 			i915_gem_context_set_bannable(ctx);
 		else
 			i915_gem_context_clear_bannable(ctx);
+		break;
+	case I915_CONTEXT_PARAM_SSEU:
+		if (args->size)
+			ret = -EINVAL;
+		else if (!i915.enable_execlists)
+			ret = -ENODEV;
+		else
+			ret = intel_lr_context_set_sseu(ctx, args->value);
 		break;
 	default:
 		ret = -EINVAL;
