@@ -112,4 +112,8 @@ intel_lr_context_descriptor(struct i915_gem_context *ctx,
 	return ctx->engine[engine->id].lrc_desc;
 }
 
+int intel_lr_context_set_sseu(struct i915_gem_context *ctx,
+			      struct intel_engine_cs *engine,
+			      struct i915_gem_context_sseu *sseu);
+
 #endif /* _INTEL_LRC_H_ */
