@@ -1812,14 +1812,6 @@ static int gen8_enable_metric_set(struct drm_i915_private *dev_priv)
 	}
 	I915_WRITE(GDT_CHICKEN_BITS, 0x80);
 
-	/* It takes a fairly long time for a new MUX configuration to
-	 * be be applied after these register writes. This delay
-	 * duration is take from Haswell (derived empirically based on
-	 * the render_basic config) but hopefully it covers the
-	 * maximum configuration latency for Gen8+ too...
-	 */
-	usleep_range(15000, 20000);
-
 	config_oa_regs(dev_priv, dev_priv->perf.oa.b_counter_regs,
 		       dev_priv->perf.oa.b_counter_regs_len);
 
