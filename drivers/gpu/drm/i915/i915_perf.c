@@ -1069,19 +1069,22 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 
 	spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 
-	/* An invalid tail pointer here means we're still waiting for the poll
+	/*
+	 * An invalid tail pointer here means we're still waiting for the poll
 	 * hrtimer callback to give us a pointer
 	 */
 	if (tail == INVALID_TAIL_PTR)
 		return -EAGAIN;
 
-	/* NB: oa_buffer.head/tail include the gtt_offset which we don't want
+	/*
+	 * NB: oa_buffer.head/tail include the gtt_offset which we don't want
 	 * while indexing relative to oa_buf_base.
 	 */
 	head -= gtt_offset;
 	tail -= gtt_offset;
 
-	/* An out of bounds or misaligned head or tail pointer implies a driver
+	/*
+	 * An out of bounds or misaligned head or tail pointer implies a driver
 	 * bug since we validate + align the tail pointers we read from the
 	 * hardware and we are in full control of the head pointer which should
 	 * only be incremented by multiples of the report size (notably also
@@ -1103,7 +1106,8 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 		u8 *report = oa_buf_base + head;
 		u32 *report32 = (void *)report;
 
-		/* All the report sizes factor neatly into the buffer
+		/*
+		 * All the report sizes factor neatly into the buffer
 		 * size so we never expect to see a report split
 		 * between the beginning and end of the buffer.
 		 *
@@ -1153,7 +1157,8 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 		if (ret)
 			break;
 
-		/* The above report-id field sanity check is based on
+		/*
+		 * The above report-id field sanity check is based on
 		 * the assumption that the OA buffer is initially
 		 * zeroed and we reset the field after copying so the
 		 * check is still meaningful once old reports start
@@ -1165,7 +1170,8 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 	if (start_offset != *offset) {
 		spin_lock_irqsave(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 
-		/* We removed the gtt_offset for the copy loop above, indexing
+		/*
+		 * We removed the gtt_offset for the copy loop above, indexing
 		 * relative to oa_buf_base so put back here...
 		 */
 		head += gtt_offset;
@@ -1231,14 +1237,16 @@ static int gen7_oa_read(struct i915_perf_stream *stream,
 
 	oastatus1 = I915_READ(GEN7_OASTATUS1);
 
-	/* XXX: On Haswell we don't have a safe way to clear oastatus1
+	/*
+	 * XXX: On Haswell we don't have a safe way to clear oastatus1
 	 * bits while the OA unit is enabled (while the tail pointer
 	 * may be updated asynchronously) so we ignore status bits
 	 * that have already been reported to userspace.
 	 */
 	oastatus1 &= ~dev_priv->perf.oa.gen7_latched_oastatus1;
 
-	/* We treat OABUFFER_OVERFLOW as a significant error:
+	/*
+	 * We treat OABUFFER_OVERFLOW as a significant error:
 	 *
 	 * - The status can be interpreted to mean that the buffer is
 	 *   currently full (with a higher precedence than OA_TAKEN()
@@ -1582,7 +1590,8 @@ static void gen7_init_oa_buffer(struct drm_i915_private *dev_priv)
 
 	spin_lock_irqsave(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 
-	/* Pre-DevBDW: OABUFFER must be set with counters off,
+	/*
+	 * Pre-DevBDW: OABUFFER must be set with counters off,
 	 * before OASTATUS1, but after OASTATUS2
 	 */
 	I915_WRITE(GEN7_OASTATUS2, gtt_offset | OA_MEM_SELECT_GGTT); /* head */
@@ -1598,13 +1607,15 @@ static void gen7_init_oa_buffer(struct drm_i915_private *dev_priv)
 
 	spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 
-	/* On Haswell we have to track which OASTATUS1 flags we've
+	/*
+	 * On Haswell we have to track which OASTATUS1 flags we've
 	 * already seen since they can't be cleared while periodic
 	 * sampling is enabled.
 	 */
 	dev_priv->perf.oa.gen7_latched_oastatus1 = 0;
 
-	/* NB: although the OA buffer will initially be allocated
+	/*
+	 * NB: although the OA buffer will initially be allocated
 	 * zeroed via shmfs (and so this memset is redundant when
 	 * first allocating), we may re-init the OA buffer, either
 	 * when re-enabling a stream or in error/reset paths.
@@ -1617,7 +1628,8 @@ static void gen7_init_oa_buffer(struct drm_i915_private *dev_priv)
 	 */
 	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0, OA_BUFFER_SIZE);
 
-	/* Maybe make ->pollin per-stream state if we support multiple
+	/*
+	 * Maybe make ->pollin per-stream state if we support multiple
 	 * concurrent streams in the future.
 	 */
 	dev_priv->perf.oa.pollin = false;
@@ -1783,7 +1795,8 @@ static int hsw_enable_metric_set(struct drm_i915_private *dev_priv)
 	I915_WRITE(GDT_CHICKEN_BITS, (I915_READ(GDT_CHICKEN_BITS) |
 				      GT_NOA_ENABLE));
 
-	/* PRM:
+	/*
+	 * PRM:
 	 *
 	 * OA unit is using “crclk” for its functionality. When trunk
 	 * level clock gating takes place, OA clock would be gated,
@@ -1802,7 +1815,8 @@ static int hsw_enable_metric_set(struct drm_i915_private *dev_priv)
 			       dev_priv->perf.oa.mux_regs_lens[i]);
 	}
 
-	/* It apparently takes a fairly long time for a new MUX
+	/*
+	 * It apparently takes a fairly long time for a new MUX
 	 * configuration to be be applied after these register writes.
 	 * This delay duration was derived empirically based on the
 	 * render_basic config but hopefully it covers the maximum
@@ -2315,7 +2329,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	int format_size;
 	int ret;
 
-	/* If the sysfs metrics/ directory wasn't registered for some
+	/*
+	 * If the sysfs metrics/ directory wasn't registered for some
 	 * reason then don't let userspace try their luck with config
 	 * IDs
 	 */
@@ -2334,7 +2349,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		return -ENODEV;
 	}
 
-	/* To avoid the complexity of having to accurately filter
+	/*
+	 * To avoid the complexity of having to accurately filter
 	 * counter reports and marshal to the appropriate client
 	 * we currently only allow exclusive access
 	 */
@@ -2353,7 +2369,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		return -EINVAL;
 	}
 
-	/* We set up some ratelimit state to potentially throttle any _NOTES
+	/*
+	 * We set up some ratelimit state to potentially throttle any _NOTES
 	 * about spurious, invalid OA reports which we don't forward to
 	 * userspace.
 	 *
@@ -2366,7 +2383,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	 */
 	ratelimit_state_init(&dev_priv->perf.oa.spurious_report_rs,
 			     5 * HZ, 10);
-	/* Since we use a DRM_NOTE for spurious reports it would be
+	/*
+	 * Since we use a DRM_NOTE for spurious reports it would be
 	 * inconsistent to let __ratelimit() automatically print a warning for
 	 * throttling.
 	 */
@@ -2416,7 +2434,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	if (ret)
 		goto err_oa_buf_alloc;
 
-	/* PRM - observability performance counters:
+	/*
+	 * PRM - observability performance counters:
 	 *
 	 *   OACONTROL, performance counter enable, note:
 	 *
@@ -2633,7 +2652,8 @@ static ssize_t i915_perf_read_locked(struct i915_perf_stream *stream,
 				     size_t count,
 				     loff_t *ppos)
 {
-	/* Note we keep the offset (aka bytes read) separate from any
+	/*
+	 * Note we keep the offset (aka bytes read) separate from any
 	 * error status so that the final check for whether we return
 	 * the bytes read with a higher precedence than any error (see
 	 * comment below) doesn't need to be handled/duplicated in
@@ -2672,7 +2692,8 @@ static ssize_t i915_perf_read(struct file *file,
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 	ssize_t ret;
 
-	/* To ensure it's handled consistently we simply treat all reads of a
+	/*
+	 * To ensure it's handled consistently we simply treat all reads of a
 	 * disabled stream as an error. In particular it might otherwise lead
 	 * to a deadlock for blocking file descriptors...
 	 */
@@ -2680,7 +2701,8 @@ static ssize_t i915_perf_read(struct file *file,
 		return -EIO;
 
 	if (!(file->f_flags & O_NONBLOCK)) {
-		/* There's the small chance of false positives from
+		/*
+		 * There's the small chance of false positives from
 		 * stream->ops->wait_unlocked.
 		 *
 		 * E.g. with single context filtering since we only wait until
@@ -2703,7 +2725,8 @@ static ssize_t i915_perf_read(struct file *file,
 		mutex_unlock(&dev_priv->perf.lock);
 	}
 
-	/* We allow the poll checking to sometimes report false positive POLLIN
+	/*
+	 * We allow the poll checking to sometimes report false positive POLLIN
 	 * events where we might actually report EAGAIN on read() if there's
 	 * not really any data available. In this situation though we don't
 	 * want to enter a busy loop between poll() reporting a POLLIN event
@@ -2712,7 +2735,8 @@ static ssize_t i915_perf_read(struct file *file,
 	 * before reporting another POLLIN event.
 	 */
 	if (ret >= 0 || ret == -EAGAIN) {
-		/* Maybe make ->pollin per-stream state if we support multiple
+		/*
+		 * Maybe make ->pollin per-stream state if we support multiple
 		 * concurrent streams in the future.
 		 */
 		dev_priv->perf.oa.pollin = false;
@@ -2762,7 +2786,8 @@ static unsigned int i915_perf_poll_locked(struct drm_i915_private *dev_priv,
 
 	stream->ops->poll_wait(stream, file, wait);
 
-	/* Note: we don't explicitly check whether there's something to read
+	/*
+	 * Note: we don't explicitly check whether there's something to read
 	 * here since this path may be very hot depending on what else
 	 * userspace is polling, or on the timeout in use. We rely solely on
 	 * the hrtimer/oa_poll_check_timer_cb to notify us when there are
@@ -3056,7 +3081,8 @@ i915_perf_open_ioctl_locked(struct drm_i915_private *dev_priv,
 	if (IS_HASWELL(dev_priv) && specific_ctx)
 		privileged_op = false;
 
-	/* Similar to perf's kernel.perf_paranoid_cpu sysctl option
+	/*
+	 * Similar to perf's kernel.perf_paranoid_cpu sysctl option
 	 * we check a dev.i915.perf_stream_paranoid sysctl option
 	 * to determine if it's ok to access system wide OA counters
 	 * without CAP_SYS_ADMIN privileges.
@@ -3081,7 +3107,8 @@ i915_perf_open_ioctl_locked(struct drm_i915_private *dev_priv,
 	if (ret)
 		goto err_alloc;
 
-	/* we avoid simply assigning stream->sample_flags = props->sample_flags
+	/*
+	 * We avoid simply assigning stream->sample_flags = props->sample_flags
 	 * to have _stream_init check the combination of sample flags more
 	 * thoroughly, but still this is the expected result at this point.
 	 */
@@ -3158,7 +3185,8 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 		return -EINVAL;
 	}
 
-	/* Considering that ID = 0 is reserved and assuming that we don't
+	/*
+	 * Considering that ID = 0 is reserved and assuming that we don't
 	 * (currently) expect any configurations to ever specify duplicate
 	 * values for a particular property ID then the last _PROP_MAX value is
 	 * one greater than the maximum number of properties we expect to get
@@ -3223,7 +3251,8 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 				return -EINVAL;
 			}
 
-			/* Theoretically we can program the OA unit to sample
+			/*
+			 * Theoretically we can program the OA unit to sample
 			 * e.g. every 160ns for HSW, 167ns for BDW/SKL or 104ns
 			 * for BXT. We don't allow such high sampling
 			 * frequencies by default unless root.
@@ -3232,7 +3261,8 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 			BUILD_BUG_ON(sizeof(oa_period) != 8);
 			oa_period = oa_exponent_to_ns(dev_priv, value);
 
-			/* This check is primarily to ensure that oa_period <=
+			/*
+			 * This check is primarily to ensure that oa_period <=
 			 * UINT32_MAX (before passing to do_div which only
 			 * accepts a u32 denominator), but we can also skip
 			 * checking anything < 1Hz which implicitly can't be
@@ -3345,7 +3375,8 @@ void i915_perf_register(struct drm_i915_private *dev_priv)
 	if (!dev_priv->perf.initialized)
 		return;
 
-	/* To be sure we're synchronized with an attempted
+	/*
+	 * To be sure we're synchronized with an attempted
 	 * i915_perf_open_ioctl(); considering that we register after
 	 * being exposed to userspace.
 	 */
@@ -3519,7 +3550,8 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 		dev_priv->perf.oa.n_builtin_sets =
 			i915_oa_n_builtin_metric_sets_hsw;
 	} else if (i915.enable_execlists) {
-		/* Note: that although we could theoretically also support the
+		/*
+		 * Note: that although we could theoretically also support the
 		 * legacy ringbuffer mode on BDW (and earlier iterations of
 		 * this driver, before upstreaming did this) it didn't seem
 		 * worth the complexity to maintain now that BDW+ enable

@@ -1478,7 +1478,7 @@ enum drm_i915_perf_record_type {
 	 */
 	DRM_I915_PERF_RECORD_SAMPLE = 1,
 
-	/*
+	/**
 	 * Indicates that one or more OA reports were not written by the
 	 * hardware. This can happen for example if an MI_REPORT_PERF_COUNT
 	 * command collides with periodic sampling - which would be more likely
