@@ -257,8 +257,9 @@ function url_to_remote # url [url ...]
 		return 1
 	fi
 
-	for url; do
-		remote=$(git remote -v | grep -m 1 "$url" | cut -f 1)
+        for url; do
+		login_url_regex=$(echo $url | sed -e 's,ssh://,ssh://[a-zA-Z0-9]*@\\?,')
+		remote=$(git remote -v | grep -m 1 "$login_url_regex" | cut -f 1)
 		if [[ -n "$remote" ]]; then
 			echo "$remote"
 			return 0
