@@ -75,6 +75,7 @@ i915-y += i915_cmd_parser.o \
 	  intel_hangcheck.o \
 	  intel_lrc.o \
 	  intel_mocs.o \
+	  intel_query_info.o \
 	  intel_ringbuffer.o \
 	  intel_uncore.o
 

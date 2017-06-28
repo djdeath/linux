@@ -28,6 +28,7 @@
 #include "i915_vgpu.h"
 #include "intel_ringbuffer.h"
 #include "intel_lrc.h"
+#include <uapi/drm/i915_drm.h>
 
 /* Haswell does have the CXT_SIZE register however it does not appear to be
  * valid. Now, docs explain in dwords what is in the context object. The full

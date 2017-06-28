@@ -3858,6 +3858,9 @@ void i915_oa_init_reg_state(struct intel_engine_cs *engine,
 			    struct i915_gem_context *ctx,
 			    uint32_t *reg_state);
 
+int i915_query_info_ioctl(struct drm_device *dev, void *data,
+			  struct drm_file *file);
+
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct i915_address_space *vm,
 					  u64 min_size, u64 alignment,

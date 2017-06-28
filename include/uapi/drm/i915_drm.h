@@ -262,6 +262,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_I915_PERF_OPEN		0x36
 #define DRM_I915_PERF_ADD_CONFIG	0x37
 #define DRM_I915_PERF_REMOVE_CONFIG	0x38
+#define DRM_I915_QUERY_INFO		0x39
 
 #define DRM_IOCTL_I915_INIT		DRM_IOW( DRM_COMMAND_BASE + DRM_I915_INIT, drm_i915_init_t)
 #define DRM_IOCTL_I915_FLUSH		DRM_IO ( DRM_COMMAND_BASE + DRM_I915_FLUSH)
@@ -319,6 +320,7 @@ typedef struct _drm_i915_sarea {
 #define DRM_IOCTL_I915_PERF_OPEN	DRM_IOW(DRM_COMMAND_BASE + DRM_I915_PERF_OPEN, struct drm_i915_perf_open_param)
 #define DRM_IOCTL_I915_PERF_ADD_CONFIG	DRM_IOW(DRM_COMMAND_BASE + DRM_I915_PERF_ADD_CONFIG, struct drm_i915_perf_oa_config)
 #define DRM_IOCTL_I915_PERF_REMOVE_CONFIG	DRM_IOW(DRM_COMMAND_BASE + DRM_I915_PERF_REMOVE_CONFIG, __u64)
+#define DRM_IOCTL_I915_QUERY_INFO	DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_QUERY_INFO, struct drm_i915_query_info)
 
 /* Allow drivers to submit batchbuffers directly to hardware, relying
  * on the security mechanisms provided by hardware.
@@ -1534,6 +1536,68 @@ struct drm_i915_perf_oa_config {
 	__u64 mux_regs_ptr;
 	__u64 boolean_regs_ptr;
 	__u64 flex_regs_ptr;
+};
+
+
+/* Query engines information.
+ *
+ * drm_i915_query_info.query_params[0] should be set to one of the
+ * I915_ENGINE_CLASS_* enum.
+ *
+ * drm_i915_engine_info.info_ptr will be written to with an array of
+ * drm_i915_engine_info.
+ */
+#define I915_QUERY_INFO_ENGINE		0 /* version 1 */
+
+enum drm_i915_engine_class {
+	I915_ENGINE_CLASS_OTHER = 0,
+	I915_ENGINE_CLASS_RENDER = 1,
+	I915_ENGINE_CLASS_COPY = 2,
+	I915_ENGINE_CLASS_VIDEO = 3,
+	I915_ENGINE_CLASS_VIDEO_ENHANCE = 4,
+	I915_ENGINE_CLASS_MAX /* non-ABI */
+};
+
+struct drm_i915_engine_info {
+	/** Engine instance number. */
+	__u8 instance;
+
+	/** Engine specific info. */
+#define I915_VCS_HAS_HEVC	BIT(0)
+	__u8 info;
+
+	__u8 rsvd2[6];
+};
+
+
+struct drm_i915_query_info {
+	/* in/out: Protocol version requested/supported. When set to 0, the
+	 * kernel set this field to the current supported version. EINVAL will
+	 * be return if version is greater than what the kernel supports.
+	 */
+	__u32 version;
+
+	/* in: Query to perform on the engine (use one of
+	 * I915_QUERY_INFO_* define).
+	 */
+	__u32 query;
+
+	/** in: Parameters associated with the query (refer to each
+	 * I915_QUERY_INFO_* define)
+	 */
+	__u32 query_params[3];
+
+	/* in/out: Size of the data to be copied into info_ptr. When set to 0,
+	 * the kernel set this field to the size to be copied into info_ptr.
+	 * Call this one more time with the correct value set to make the
+	 * kernel copy the data into info_ptr.
+	 */
+	__u32 info_ptr_len;
+
+	/** in/out: Pointer to the data filled for the query (pointer set by
+	 * the caller, data written by the callee).
+	 */
+	__u64 info_ptr;
 };
 
 #if defined(__cplusplus)
