@@ -1520,7 +1520,8 @@ gen10_init_indirectctx_bb(struct intel_engine_cs *engine, u32 *batch)
 
 #define CTX_WA_BB_OBJ_SIZE (PAGE_SIZE)
 
-static int lrc_setup_wa_ctx(struct intel_engine_cs *engine)
+static int lrc_setup_wa_ctx(struct intel_engine_cs *engine,
+			    struct i915_ctx_workarounds *wa_ctx)
 {
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma;
@@ -1540,7 +1541,7 @@ static int lrc_setup_wa_ctx(struct intel_engine_cs *engine)
 	if (err)
 		goto err;
 
-	engine->wa_ctx.vma = vma;
+	wa_ctx->vma = vma;
 	return 0;
 
 err:
@@ -1555,9 +1556,9 @@ static void lrc_destroy_wa_ctx(struct intel_engine_cs *engine)
 
 typedef u32 *(*wa_bb_func_t)(struct intel_engine_cs *engine, u32 *batch);
 
-static int intel_init_workaround_bb(struct intel_engine_cs *engine)
+static int intel_init_workaround_bb(struct intel_engine_cs *engine,
+				    struct i915_ctx_workarounds *wa_ctx)
 {
-	struct i915_ctx_workarounds *wa_ctx = &engine->wa_ctx;
 	struct i915_wa_ctx_bb *wa_bb[2] = { &wa_ctx->indirect_ctx,
 					    &wa_ctx->per_ctx };
 	wa_bb_func_t wa_bb_fn[2];
@@ -1587,7 +1588,7 @@ static int intel_init_workaround_bb(struct intel_engine_cs *engine)
 		return 0;
 	}
 
-	ret = lrc_setup_wa_ctx(engine);
+	ret = lrc_setup_wa_ctx(engine, wa_ctx);
 	if (ret) {
 		DRM_DEBUG_DRIVER("Failed to setup context WA page: %d\n", ret);
 		return ret;
@@ -2233,7 +2234,7 @@ int logical_render_ring_init(struct intel_engine_cs *engine)
 	if (ret)
 		return ret;
 
-	ret = intel_init_workaround_bb(engine);
+	ret = intel_init_workaround_bb(engine, &engine->wa_ctx);
 	if (ret) {
 		/*
 		 * We continue even if we fail to initialize WA batch
