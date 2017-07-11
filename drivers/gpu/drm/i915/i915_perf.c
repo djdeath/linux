@@ -1689,6 +1689,71 @@ static int gen8_emit_oa_config(struct i915_request *rq,
 	return 0;
 }
 
+#define MAX_LRI_SIZE (125U)
+
+u32 i915_oa_get_perctx_bb_size(struct intel_engine_cs *engine)
+{
+	struct drm_i915_private *dev_priv = engine->i915;
+	struct i915_perf_stream *stream = dev_priv->perf.oa.exclusive_stream;
+	struct i915_oa_config *oa_config;
+	u32 n_lri;
+
+	/* We only care about RCS. */
+	if (engine->id != RCS)
+		return 0;
+
+	/* Perf not supported. */
+	if (!dev_priv->perf.initialized)
+		return 0;
+
+	/* OA not currently configured. */
+	if (!stream)
+		return 0;
+
+	oa_config = stream->oa_config;
+
+	/* Very unlikely but possible that we have no muxes to configure. */
+	if (!oa_config->mux_regs_len)
+		return 0;
+
+	n_lri = (oa_config->mux_regs_len / MAX_LRI_SIZE) +
+		(oa_config->mux_regs_len % MAX_LRI_SIZE) != 0;
+
+	/* Return the size of MI_LOAD_REGISTER_IMMs + PIPE_CONTROL . */
+	return n_lri * 4 + oa_config->mux_regs_len * 8 + 24;
+}
+
+u32 *i915_oa_emit_perctx_bb(struct intel_engine_cs *engine, u32 *batch)
+{
+	struct drm_i915_private *dev_priv = engine->i915;
+	struct i915_oa_config *oa_config;
+	u32 i, n_loaded_regs;
+
+	if (i915_oa_get_perctx_bb_size(engine) == 0)
+		return batch;
+
+	oa_config = dev_priv->perf.oa.exclusive_stream->oa_config;
+
+	n_loaded_regs = 0;
+	for (i = 0; i < oa_config->mux_regs_len; i++) {
+		if ((n_loaded_regs % MAX_LRI_SIZE) == 0) {
+			u32 n_lri = min(oa_config->mux_regs_len - n_loaded_regs,
+					MAX_LRI_SIZE);
+			*batch++ = MI_LOAD_REGISTER_IMM(n_lri);
+		}
+
+		*batch++ = i915_mmio_reg_offset(oa_config->mux_regs[i].addr);
+		*batch++ = oa_config->mux_regs[i].value;
+		n_loaded_regs++;
+	}
+
+	batch = gen8_emit_pipe_control(batch,
+				       PIPE_CONTROL_MMIO_WRITE,
+				       0);
+
+	return batch;
+}
+
 static int gen8_switch_to_updated_kernel_context(struct drm_i915_private *dev_priv,
 						 const struct i915_oa_config *oa_config)
 {
@@ -1766,7 +1831,7 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 	/* Switch away from any user context. */
 	ret = gen8_switch_to_updated_kernel_context(dev_priv, oa_config);
 	if (ret)
-		goto out;
+		return ret;
 
 	/*
 	 * The OA register config is setup through the context image. This image
@@ -1783,7 +1848,16 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 	 */
 	ret = i915_gem_wait_for_idle(dev_priv, wait_flags);
 	if (ret)
-		goto out;
+		return ret;
+
+	/*
+	 * Reload the workaround batchbuffer to include NOA muxes
+	 * reprogramming on context-switch, so we don't loose configurations
+	 * after switch-from a context with disabled slices/subslices.
+	 */
+	ret = logical_render_ring_reload_wa_bb(dev_priv->engine[RCS]);
+	if (ret)
+		return ret;
 
 	/* Update all contexts now that we've stalled the submission. */
 	list_for_each_entry(ctx, &dev_priv->contexts.list, link) {
@@ -1795,10 +1869,8 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 			continue;
 
 		regs = i915_gem_object_pin_map(ce->state->obj, I915_MAP_WB);
-		if (IS_ERR(regs)) {
-			ret = PTR_ERR(regs);
-			goto out;
-		}
+		if (IS_ERR(regs))
+			return PTR_ERR(regs);
 
 		ce->state->obj->mm.dirty = true;
 		regs += LRC_STATE_PN * PAGE_SIZE / sizeof(*regs);
@@ -1808,7 +1880,6 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 		i915_gem_object_unpin_map(ce->state->obj);
 	}
 
- out:
 	return ret;
 }
 
@@ -2138,6 +2209,13 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	stream->ops = &i915_oa_stream_ops;
 
 	dev_priv->perf.oa.exclusive_stream = stream;
+
+	ret = dev_priv->perf.oa.ops.enable_metric_set(dev_priv,
+						      stream->oa_config);
+	if (ret)
+		goto err_enable;
+
+	stream->ops = &i915_oa_stream_ops;
 
 	mutex_unlock(&dev_priv->drm.struct_mutex);
 
