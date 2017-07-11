@@ -1867,6 +1867,23 @@ static u32 intel_lr_indirect_ctx_offset(struct intel_engine_cs *engine)
 	return indirect_ctx_offset;
 }
 
+static void execlists_init_reg_state_wa_bb(u32 *regs,
+					   struct intel_engine_cs *engine)
+{
+	struct i915_ctx_workarounds *wa_ctx = &engine->wa_ctx;
+	u32 ggtt_offset = i915_ggtt_offset(wa_ctx->vma);
+
+	regs[CTX_RCS_INDIRECT_CTX + 1] =
+		(ggtt_offset + wa_ctx->indirect_ctx.offset) |
+		(wa_ctx->indirect_ctx.size / CACHELINE_BYTES);
+
+	regs[CTX_RCS_INDIRECT_CTX_OFFSET + 1] =
+		intel_lr_indirect_ctx_offset(engine) << 6;
+
+	regs[CTX_BB_PER_CTX_PTR + 1] =
+		(ggtt_offset + wa_ctx->per_ctx.offset) | 0x01;
+}
+
 static void execlists_init_reg_state(u32 *regs,
 				     struct i915_gem_context *ctx,
 				     struct intel_engine_cs *engine,
@@ -1909,20 +1926,8 @@ static void execlists_init_reg_state(u32 *regs,
 		CTX_REG(regs, CTX_RCS_INDIRECT_CTX_OFFSET,
 			RING_INDIRECT_CTX_OFFSET(base), 0);
 
-		if (engine->wa_ctx.vma) {
-			struct i915_ctx_workarounds *wa_ctx = &engine->wa_ctx;
-			u32 ggtt_offset = i915_ggtt_offset(wa_ctx->vma);
-
-			regs[CTX_RCS_INDIRECT_CTX + 1] =
-				(ggtt_offset + wa_ctx->indirect_ctx.offset) |
-				(wa_ctx->indirect_ctx.size / CACHELINE_BYTES);
-
-			regs[CTX_RCS_INDIRECT_CTX_OFFSET + 1] =
-				intel_lr_indirect_ctx_offset(engine) << 6;
-
-			regs[CTX_BB_PER_CTX_PTR + 1] =
-				(ggtt_offset + wa_ctx->per_ctx.offset) | 0x01;
-		}
+		if (engine->wa_ctx.vma)
+			execlists_init_reg_state_wa_bb(regs, engine);
 	}
 
 	regs[CTX_LRI_HEADER_1] = MI_LOAD_REGISTER_IMM(9) | MI_LRI_FORCE_POSTED;
