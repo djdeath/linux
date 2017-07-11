@@ -3843,4 +3843,19 @@ static inline int intel_hws_csb_write_index(struct drm_i915_private *i915)
 		return I915_HWS_CSB_WRITE_INDEX;
 }
 
+static inline struct intel_sseu
+intel_engine_prepare_sseu(struct intel_engine_cs *engine,
+			  struct intel_sseu sseu)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	/*
+	 * If i915/perf is active, we want a stable powergating configuration
+	 * on the system. The most natural configuration to take in that case
+	 * is the default (i.e maximum the hardware can do).
+	 */
+	return i915->perf.oa.exclusive_stream ?
+		intel_device_default_sseu(i915) : sseu;
+}
+
 #endif

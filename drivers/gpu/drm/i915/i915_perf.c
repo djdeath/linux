@@ -1633,7 +1633,8 @@ static void hsw_disable_metric_set(struct drm_i915_private *dev_priv)
  */
 static void gen8_update_reg_state_unlocked(struct i915_gem_context *ctx,
 					   u32 *reg_state,
-					   const struct i915_oa_config *oa_config)
+					   const struct i915_oa_config *oa_config,
+					   struct intel_sseu sseu)
 {
 	struct drm_i915_private *dev_priv = ctx->i915;
 	u32 ctx_oactxctrl = dev_priv->perf.oa.ctx_oactxctrl_offset;
@@ -1679,6 +1680,9 @@ static void gen8_update_reg_state_unlocked(struct i915_gem_context *ctx,
 
 		CTX_REG(reg_state, state_offset, flex_regs[i], value);
 	}
+
+	CTX_REG(reg_state, CTX_R_PWR_CLK_STATE, GEN8_R_PWR_CLK_STATE,
+		gen8_make_rpcs(&INTEL_INFO(dev_priv)->sseu, sseu));
 }
 
 /*
@@ -1809,6 +1813,7 @@ static int gen8_switch_to_updated_kernel_context(struct drm_i915_private *dev_pr
 static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 				       const struct i915_oa_config *oa_config)
 {
+	struct intel_sseu default_sseu = intel_device_default_sseu(dev_priv);
 	struct intel_engine_cs *engine = dev_priv->engine[RCS];
 	struct i915_gem_context *ctx;
 	int ret;
@@ -1854,7 +1859,8 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 		ce->state->obj->mm.dirty = true;
 		regs += LRC_STATE_PN * PAGE_SIZE / sizeof(*regs);
 
-		gen8_update_reg_state_unlocked(ctx, regs, oa_config);
+		gen8_update_reg_state_unlocked(ctx, regs, oa_config,
+					       oa_config ? default_sseu : ce->sseu);
 
 		i915_gem_object_unpin_map(ce->state->obj);
 	}
@@ -2226,14 +2232,21 @@ void i915_oa_init_reg_state(struct intel_engine_cs *engine,
 			    struct i915_gem_context *ctx,
 			    u32 *reg_state)
 {
+	struct drm_i915_private *i915 = engine->i915;
 	struct i915_perf_stream *stream;
 
 	if (engine->id != RCS)
 		return;
 
-	stream = engine->i915->perf.oa.exclusive_stream;
-	if (stream)
-		gen8_update_reg_state_unlocked(ctx, reg_state, stream->oa_config);
+	stream = i915->perf.oa.exclusive_stream;
+	if (stream) {
+		struct intel_sseu default_sseu =
+			intel_device_default_sseu(i915);
+
+		gen8_update_reg_state_unlocked(ctx, reg_state,
+					       stream->oa_config,
+					       default_sseu);
+	}
 }
 
 /**

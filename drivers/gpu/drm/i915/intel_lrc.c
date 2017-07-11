@@ -2519,8 +2519,8 @@ int logical_xcs_ring_init(struct intel_engine_cs *engine)
 	return logical_ring_init(engine);
 }
 
-static u32 make_rpcs(const struct sseu_dev_info *sseu,
-		     struct intel_sseu ctx_sseu)
+u32 gen8_make_rpcs(const struct sseu_dev_info *sseu,
+		   struct intel_sseu ctx_sseu)
 {
 	u32 rpcs = 0;
 
@@ -2668,10 +2668,13 @@ static void execlists_init_reg_state(u32 *regs,
 	}
 
 	if (rcs) {
+		struct intel_sseu sseu = to_intel_context(ctx, engine)->sseu;
+
 		regs[CTX_LRI_HEADER_2] = MI_LOAD_REGISTER_IMM(1);
 		CTX_REG(regs, CTX_R_PWR_CLK_STATE, GEN8_R_PWR_CLK_STATE,
-			make_rpcs(&INTEL_INFO(dev_priv)->sseu,
-				  to_intel_context(ctx, engine)->sseu));
+			gen8_make_rpcs(&INTEL_INFO(dev_priv)->sseu,
+				       intel_engine_prepare_sseu(engine,
+								 sseu)));
 
 		i915_oa_init_reg_state(engine, ctx, regs);
 	}
