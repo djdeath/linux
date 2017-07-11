@@ -217,6 +217,8 @@ static void execlists_init_reg_state(u32 *reg_state,
 				     struct i915_gem_context *ctx,
 				     struct intel_engine_cs *engine,
 				     struct intel_ring *ring);
+static void execlists_init_reg_state_wa_bb(u32 *reg_state,
+					   struct intel_engine_cs *engine);
 
 /**
  * intel_sanitize_enable_execlists() - sanitize i915.enable_execlists
@@ -1055,6 +1057,8 @@ static u32 *gen8_init_indirectctx_bb(struct intel_engine_cs *engine, u32 *batch)
  */
 static u32 *gen8_init_perctx_bb(struct intel_engine_cs *engine, u32 *batch)
 {
+	batch = i915_oa_emit_perctx_bb(engine, batch);
+
 	/* WaDisableCtxRestoreArbitration:bdw,chv */
 	*batch++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
 	*batch++ = MI_BATCH_BUFFER_END;
@@ -1118,21 +1122,27 @@ static u32 *gen9_init_indirectctx_bb(struct intel_engine_cs *engine, u32 *batch)
 
 static u32 *gen9_init_perctx_bb(struct intel_engine_cs *engine, u32 *batch)
 {
+	batch = i915_oa_emit_perctx_bb(engine, batch);
+
 	*batch++ = MI_BATCH_BUFFER_END;
 
 	return batch;
 }
 
-#define CTX_WA_BB_OBJ_SIZE (PAGE_SIZE)
+/* Reserve 200 dwords for indirect & per-ctx bb */
+#define CTX_WA_BB_MIN_DWORDS (200)
 
 static int lrc_setup_wa_ctx(struct intel_engine_cs *engine,
 			    struct i915_ctx_workarounds *wa_ctx)
 {
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma;
+	u32 size = DIV_ROUND_UP(i915_oa_get_perctx_bb_size(engine->i915) +
+				4 * CTX_WA_BB_MIN_DWORDS,
+				PAGE_SIZE) * PAGE_SIZE;
 	int err;
 
-	obj = i915_gem_object_create(engine->i915, CTX_WA_BB_OBJ_SIZE);
+	obj = i915_gem_object_create(engine->i915, size);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
@@ -1142,7 +1152,7 @@ static int lrc_setup_wa_ctx(struct intel_engine_cs *engine,
 		goto err;
 	}
 
-	err = i915_vma_pin(vma, 0, CTX_WA_BB_OBJ_SIZE, PIN_GLOBAL | PIN_HIGH);
+	err = i915_vma_pin(vma, 0, size, PIN_GLOBAL | PIN_HIGH);
 	if (err)
 		goto err;
 
@@ -1213,7 +1223,7 @@ static int intel_init_workaround_bb(struct intel_engine_cs *engine,
 		wa_bb[i]->size = batch_ptr - (batch + wa_bb[i]->offset);
 	}
 
-	BUG_ON(batch_ptr - batch > CTX_WA_BB_OBJ_SIZE);
+	BUG_ON(batch_ptr - batch > wa_ctx->vma->obj->base.size);
 
 	kunmap_atomic(batch);
 	if (ret)
@@ -1803,6 +1813,52 @@ int logical_render_ring_init(struct intel_engine_cs *engine)
 	}
 
 	return logical_ring_init(engine);
+}
+
+int logical_render_ring_reload_wa_bb(struct intel_engine_cs *engine)
+{
+	struct drm_i915_private *dev_priv = engine->i915;
+	struct i915_ctx_workarounds new_wa_ctx;
+	struct i915_gem_context *ctx;
+	int ret;
+
+	if (WARN_ON(engine->id != RCS))
+		return -EINVAL;
+
+	memset(&new_wa_ctx, 0, sizeof(new_wa_ctx));
+	ret = intel_init_workaround_bb(engine, &new_wa_ctx);
+	if (ret)
+		return ret;
+
+	if (engine->wa_ctx.vma)
+		lrc_destroy_wa_ctx(engine);
+
+	memcpy(&engine->wa_ctx, &new_wa_ctx, sizeof(engine->wa_ctx));
+
+	list_for_each_entry(ctx, &dev_priv->contexts.list, link) {
+		struct intel_context *ce = &ctx->engine[RCS];
+		u32 *regs;
+
+		/* Settings will be set upon first use. */
+		if (!ce->state)
+			continue;
+
+		regs = i915_gem_object_pin_map(ce->state->obj, I915_MAP_WB);
+		if (IS_ERR(regs)) {
+			ret = PTR_ERR(regs);
+			break;
+		}
+
+		ce->state->obj->mm.dirty = true;
+		regs += LRC_STATE_PN * PAGE_SIZE / sizeof(*regs);
+
+		if (engine->wa_ctx.vma)
+			execlists_init_reg_state_wa_bb(regs, engine);
+
+		i915_gem_object_unpin_map(ce->state->obj);
+	}
+
+	return ret;
 }
 
 int logical_xcs_ring_init(struct intel_engine_cs *engine)

@@ -1679,6 +1679,63 @@ static int gen8_emit_oa_config(struct drm_i915_gem_request *req,
 	return 0;
 }
 
+u32 i915_oa_get_perctx_bb_size(struct drm_i915_private *dev_priv)
+{
+	struct i915_perf_stream *stream = dev_priv->perf.oa.exclusive_stream;
+
+	lockdep_assert_held(&dev_priv->drm.struct_mutex);
+
+	/* Perf not supported. */
+	if (!dev_priv->perf.initialized)
+		return 0;
+
+	/* OA not currently configured. */
+	if (!stream)
+		return 0;
+
+	/* Very unlikely but possible that we have no muxes to configure. */
+	if (!stream->oa_config->mux_regs_len)
+		return 0;
+
+	/* Return the size of MI_LOAD_REGISTER_IMM. */
+	return 4 + stream->oa_config->mux_regs_len * 8;
+}
+
+u32 *i915_oa_emit_perctx_bb(struct intel_engine_cs *engine, u32 *batch)
+{
+	struct drm_i915_private *dev_priv = engine->i915;
+	struct i915_perf_stream *stream = dev_priv->perf.oa.exclusive_stream;
+	u32 i;
+
+	lockdep_assert_held(&dev_priv->drm.struct_mutex);
+
+	/* We only care about RCS. */
+	if (engine->id != RCS)
+		return batch;
+
+	/* Perf not supported. */
+	if (!dev_priv->perf.initialized)
+		return batch;
+
+	/* OA not currently configured. */
+	if (!stream)
+		return batch;
+
+	/* It's very unlikely, but possible that we're dealing with a config
+	 * with no mux to configure.
+	 */
+	if (!stream->oa_config->mux_regs_len)
+		return batch;
+
+	*batch++ = MI_LOAD_REGISTER_IMM(stream->oa_config->mux_regs_len);
+	for (i = 0; i < stream->oa_config->mux_regs_len; i++) {
+		*batch++ = i915_mmio_reg_offset(stream->oa_config->mux_regs[i].addr);
+		*batch++ = stream->oa_config->mux_regs[i].value;
+	}
+
+	return batch;
+}
+
 static int gen8_switch_to_updated_kernel_context(struct drm_i915_private *dev_priv,
 						 const struct i915_oa_config *oa_config)
 {
@@ -1784,6 +1841,15 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 	ret = i915_gem_wait_for_idle(dev_priv, wait_flags);
 	if (ret)
 		goto out;
+
+	/*
+	 * Reload the workaround batchbuffer to include NOA muxes
+	 * reprogramming on context-switch, so we don't loose configurations
+	 * after switch-from a context with disabled slices/subslices.
+	 */
+	ret = logical_render_ring_reload_wa_bb(dev_priv->engine[RCS]);
+	if (ret)
+		return ret;
 
 	/* Update all contexts now that we've stalled the submission. */
 	list_for_each_entry(ctx, &dev_priv->contexts.list, link) {
