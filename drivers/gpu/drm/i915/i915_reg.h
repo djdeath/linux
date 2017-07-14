@@ -732,6 +732,8 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 #define GDT_CHICKEN_BITS    _MMIO(0x9840)
 #define GT_NOA_ENABLE	    0x00000080
 
+#define NOA_WRITE           _MMIO(0x9888)
+
 /*
  * OA Boolean state
  */
