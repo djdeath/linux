@@ -1895,8 +1895,9 @@ struct i915_oa_config {
 	struct attribute *attrs[2];
 	struct device_attribute sysfs_metric_id;
 
-	/* Only updated while holding dev_priv->perf.metrics_lock. */
-	bool in_use;
+	bool sysfs_entry_created;
+
+	atomic_t ref_count;
 };
 
 struct i915_perf_stream;

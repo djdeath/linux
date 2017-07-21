@@ -358,6 +358,27 @@ struct perf_open_properties {
 	int oa_period_exponent;
 };
 
+static void free_oa_config(struct drm_i915_private *dev_priv,
+			   struct i915_oa_config *oa_config)
+{
+	if (oa_config->sysfs_entry_created)
+		sysfs_remove_group(dev_priv->perf.metrics_kobj,
+				   &oa_config->sysfs_metric);
+	kfree(oa_config->flex_regs);
+	kfree(oa_config->b_counter_regs);
+	kfree(oa_config->mux_regs);
+	kfree(oa_config);
+}
+
+static void put_oa_config(struct drm_i915_private *dev_priv,
+			  struct i915_oa_config *oa_config)
+{
+	if (!atomic_dec_and_test(&oa_config->ref_count))
+		return;
+
+	free_oa_config(dev_priv, oa_config);
+}
+
 static int get_oa_config(struct drm_i915_private *dev_priv,
 			 int metrics_set,
 			 struct i915_oa_config **out_config)
@@ -366,6 +387,7 @@ static int get_oa_config(struct drm_i915_private *dev_priv,
 
 	if (metrics_set == 1) {
 		*out_config = &dev_priv->perf.oa.test_config;
+		atomic_inc(&dev_priv->perf.oa.test_config.ref_count);
 		return 0;
 	}
 
@@ -382,17 +404,6 @@ static int get_oa_config(struct drm_i915_private *dev_priv,
 	mutex_unlock(&dev_priv->perf.metrics_lock);
 
 	return ret;
-}
-
-static void put_oa_config(struct drm_i915_private *dev_priv,
-			  struct i915_oa_config *oa_config)
-{
-	if (oa_config == &dev_priv->perf.oa.test_config)
-		return;
-
-	mutex_lock(&dev_priv->perf.metrics_lock);
-	oa_config->in_use = false;
-	mutex_unlock(&dev_priv->perf.metrics_lock);
 }
 
 static u32 gen8_oa_hw_tail_read(struct drm_i915_private *dev_priv)
@@ -3000,6 +3011,10 @@ void i915_perf_register(struct drm_i915_private *dev_priv)
 				 &dev_priv->perf.oa.test_config.sysfs_metric);
 	if (ret)
 		goto sysfs_error;
+
+	atomic_set(&dev_priv->perf.oa.test_config.ref_count, 1);
+	dev_priv->perf.oa.test_config.sysfs_entry_created = true;
+
 	goto exit;
 
 sysfs_error:
