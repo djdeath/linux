@@ -364,9 +364,12 @@ static void free_oa_config(struct drm_i915_private *dev_priv,
 	if (oa_config->sysfs_entry_created)
 		sysfs_remove_group(dev_priv->perf.metrics_kobj,
 				   &oa_config->sysfs_metric);
-	kfree(oa_config->flex_regs);
-	kfree(oa_config->b_counter_regs);
-	kfree(oa_config->mux_regs);
+	if (!PTR_ERR(oa_config->flex_regs))
+		kfree(oa_config->flex_regs);
+	if (!PTR_ERR(oa_config->b_counter_regs))
+		kfree(oa_config->b_counter_regs);
+	if (!PTR_ERR(oa_config->mux_regs))
+		kfree(oa_config->mux_regs);
 	kfree(oa_config);
 }
 
