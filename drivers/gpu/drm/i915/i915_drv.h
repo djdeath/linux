@@ -1895,8 +1895,6 @@ struct i915_oa_config {
 	struct attribute *attrs[2];
 	struct device_attribute sysfs_metric_id;
 
-	bool sysfs_entry_created;
-
 	atomic_t ref_count;
 };
 

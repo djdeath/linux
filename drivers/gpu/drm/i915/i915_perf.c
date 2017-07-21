@@ -361,9 +361,6 @@ struct perf_open_properties {
 static void free_oa_config(struct drm_i915_private *dev_priv,
 			   struct i915_oa_config *oa_config)
 {
-	if (oa_config->sysfs_entry_created)
-		sysfs_remove_group(dev_priv->perf.metrics_kobj,
-				   &oa_config->sysfs_metric);
 	if (!PTR_ERR(oa_config->flex_regs))
 		kfree(oa_config->flex_regs);
 	if (!PTR_ERR(oa_config->b_counter_regs))
@@ -3016,7 +3013,6 @@ void i915_perf_register(struct drm_i915_private *dev_priv)
 		goto sysfs_error;
 
 	atomic_set(&dev_priv->perf.oa.test_config.ref_count, 1);
-	dev_priv->perf.oa.test_config.sysfs_entry_created = true;
 
 	goto exit;
 
