@@ -3291,7 +3291,7 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		if (!strcmp(tmp->uuid, oa_config->uuid)) {
 			DRM_DEBUG("OA config already exists with this uuid\n");
 			err = -EADDRINUSE;
-			goto reg_err;
+			goto sysfs_err;
 		}
 	}
 
