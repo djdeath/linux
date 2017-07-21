@@ -3153,8 +3153,6 @@ static ssize_t show_dynamic_id(struct device *dev,
 static int create_dynamic_oa_sysfs_entry(struct drm_i915_private *dev_priv,
 					 struct i915_oa_config *oa_config)
 {
-	int ret;
-
 	oa_config->sysfs_metric_id.attr.name = "id";
 	oa_config->sysfs_metric_id.attr.mode = S_IRUGO;
 	oa_config->sysfs_metric_id.show = show_dynamic_id;
@@ -3166,22 +3164,8 @@ static int create_dynamic_oa_sysfs_entry(struct drm_i915_private *dev_priv,
 	oa_config->sysfs_metric.name = oa_config->uuid;
 	oa_config->sysfs_metric.attrs = oa_config->attrs;
 
-	ret = sysfs_create_group(dev_priv->perf.metrics_kobj,
-				 &oa_config->sysfs_metric);
-	if (ret == 0)
-		oa_config->sysfs_entry_created = true;
-
-	return  ret;
-}
-
-static int destroy_config(int id, void *p, void *data)
-{
-	struct drm_i915_private *dev_priv = data;
-	struct i915_oa_config *oa_config = p;
-
-	put_oa_config(dev_priv, oa_config);
-
-	return 0;
+	return sysfs_create_group(dev_priv->perf.metrics_kobj,
+				  &oa_config->sysfs_metric);
 }
 
 int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
@@ -3350,6 +3334,9 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 
 	GEM_BUG_ON(*arg != oa_config->id);
 
+	sysfs_remove_group(dev_priv->perf.metrics_kobj,
+			   &oa_config->sysfs_metric);
+
 	idr_remove(&dev_priv->perf.metrics_idr, *arg);
 	put_oa_config(dev_priv, oa_config);
 
@@ -3510,6 +3497,16 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 
 		dev_priv->perf.initialized = true;
 	}
+}
+
+static int destroy_config(int id, void *p, void *data)
+{
+	struct drm_i915_private *dev_priv = data;
+	struct i915_oa_config *oa_config = p;
+
+	put_oa_config(dev_priv, oa_config);
+
+	return 0;
 }
 
 /**
