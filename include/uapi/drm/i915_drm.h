@@ -1488,18 +1488,14 @@ enum drm_i915_perf_record_type {
  */
 struct drm_i915_perf_oa_config {
 	/** String formatted like "%08x-%04x-%04x-%04x-%012x" */
-	__u64 __user uuid;
+	char uuid[36];
 
 	__u32 n_mux_regs;
-	__u32 pad0;
-	__u64 __user mux_regs;
-
 	__u32 n_boolean_regs;
-	__u32 pad1;
-	__u64 __user boolean_regs;
-
 	__u32 n_flex_regs;
-	__u32 pad2;
+
+	__u64 __user mux_regs;
+	__u64 __user boolean_regs;
 	__u64 __user flex_regs;
 };
 

@@ -399,7 +399,7 @@ static int get_oa_config(struct drm_i915_private *dev_priv,
 	if (!*out_config)
 		ret = -EINVAL;
 	else
-		(*out_config)->in_use = true;
+		atomic_inc(&(*out_config)->ref_count);
 
 	mutex_unlock(&dev_priv->perf.metrics_lock);
 
@@ -3154,6 +3154,8 @@ static ssize_t show_dynamic_id(struct device *dev,
 static int create_dynamic_oa_sysfs_entry(struct drm_i915_private *dev_priv,
 					 struct i915_oa_config *oa_config)
 {
+	int ret;
+
 	oa_config->sysfs_metric_id.attr.name = "id";
 	oa_config->sysfs_metric_id.attr.mode = S_IRUGO;
 	oa_config->sysfs_metric_id.show = show_dynamic_id;
@@ -3165,8 +3167,12 @@ static int create_dynamic_oa_sysfs_entry(struct drm_i915_private *dev_priv,
 	oa_config->sysfs_metric.name = oa_config->uuid;
 	oa_config->sysfs_metric.attrs = oa_config->attrs;
 
-	return sysfs_create_group(dev_priv->perf.metrics_kobj,
-				  &oa_config->sysfs_metric);
+	ret = sysfs_create_group(dev_priv->perf.metrics_kobj,
+				 &oa_config->sysfs_metric);
+	if (ret == 0)
+		oa_config->sysfs_entry_created = true;
+
+	return  ret;
 }
 
 static int destroy_config(int id, void *p, void *data)
@@ -3174,12 +3180,7 @@ static int destroy_config(int id, void *p, void *data)
 	struct drm_i915_private *dev_priv = data;
 	struct i915_oa_config *oa_config = p;
 
-	sysfs_remove_group(dev_priv->perf.metrics_kobj,
-			   &oa_config->sysfs_metric);
-	kfree(oa_config->flex_regs);
-	kfree(oa_config->b_counter_regs);
-	kfree(oa_config->mux_regs);
-	kfree(oa_config);
+	put_oa_config(dev_priv, oa_config);
 
 	return 0;
 }
@@ -3207,9 +3208,6 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		return -EACCES;
 	}
 
-	if (args->pad0 != 0 || args->pad1 != 0 || args->pad2 != 0)
-		return -EINVAL;
-
 	if ((!args->mux_regs || !args->n_mux_regs) &&
 	    (!args->boolean_regs || !args->n_boolean_regs) &&
 	    (!args->flex_regs || !args->n_flex_regs)) {
@@ -3223,18 +3221,18 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 	}
 
-	err = strncpy_from_user(oa_config->uuid, u64_to_user_ptr(args->uuid),
-				UUID_STRING_LEN);
-	if (err < 0) {
-		DRM_DEBUG("Failed to copy uuid from OA config\n");
-		goto mux_err;
-	}
+	atomic_set(&oa_config->ref_count, 1);
 
-	if (!uuid_is_valid(oa_config->uuid)) {
+	if (!uuid_is_valid(args->uuid)) {
 		DRM_DEBUG("Invalid uuid format for OA config\n");
 		err = -EINVAL;
-		goto mux_err;
+		goto reg_err;
 	}
+
+	/* Last character in oa_config->uuid will be 0 because oa_config is
+	 * kzalloc.
+	 */
+	memcpy(oa_config->uuid, args->uuid, sizeof(args->uuid));
 
 	oa_config->mux_regs_len = args->n_mux_regs;
 	oa_config->mux_regs =
@@ -3246,7 +3244,7 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 	if (IS_ERR(oa_config->mux_regs)) {
 		DRM_DEBUG("Failed to create OA config for mux_regs\n");
 		err = PTR_ERR(oa_config->mux_regs);
-		goto mux_err;
+		goto reg_err;
 	}
 
 	oa_config->b_counter_regs_len = args->n_boolean_regs;
@@ -3259,12 +3257,14 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 	if (IS_ERR(oa_config->b_counter_regs)) {
 		DRM_DEBUG("Failed to create OA config for b_counter_regs\n");
 		err = PTR_ERR(oa_config->b_counter_regs);
-		goto boolean_err;
+		goto reg_err;
 	}
 
 	if (INTEL_GEN(dev_priv) < 8) {
-		if (args->n_flex_regs != 0)
-			goto flex_err;
+		if (args->n_flex_regs != 0) {
+			err = -EINVAL;
+			goto reg_err;
+		}
 	} else {
 		oa_config->flex_regs_len = args->n_flex_regs;
 		oa_config->flex_regs =
@@ -3276,19 +3276,19 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		if (IS_ERR(oa_config->flex_regs)) {
 			DRM_DEBUG("Failed to create OA config for flex_regs\n");
 			err = PTR_ERR(oa_config->flex_regs);
-			goto flex_err;
+			goto reg_err;
 		}
 	}
 
 	err = mutex_lock_interruptible(&dev_priv->perf.metrics_lock);
 	if (err)
-		goto lock_err;
+		goto reg_err;
 
 	idr_for_each_entry(&dev_priv->perf.metrics_idr, tmp, id) {
 		if (!strcmp(tmp->uuid, oa_config->uuid)) {
 			DRM_DEBUG("OA config already exists with this uuid\n");
 			err = -EADDRINUSE;
-			goto sysfs_err;
+			goto reg_err;
 		}
 	}
 
@@ -3298,33 +3298,24 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		goto sysfs_err;
 	}
 
+	/* Config id 0 is invalid, id 1 for kernel stored test config. */
 	oa_config->id = idr_alloc(&dev_priv->perf.metrics_idr,
 				  oa_config, 2,
 				  0, GFP_KERNEL);
 	if (oa_config->id < 0) {
 		DRM_DEBUG("Failed to create sysfs entry for OA config\n");
 		err = oa_config->id;
-		goto idr_err;
+		goto sysfs_err;
 	}
 
 	mutex_unlock(&dev_priv->perf.metrics_lock);
 
 	return oa_config->id;
 
-idr_err:
-	sysfs_remove_group(dev_priv->perf.metrics_kobj,
-			   &oa_config->sysfs_metric);
 sysfs_err:
 	mutex_unlock(&dev_priv->perf.metrics_lock);
-lock_err:
-	kfree(oa_config->flex_regs);
-flex_err:
-	kfree(oa_config->b_counter_regs);
-boolean_err:
-	kfree(oa_config->mux_regs);
-mux_err:
-	kfree(oa_config);
-
+reg_err:
+	put_oa_config(dev_priv, oa_config);
 	DRM_DEBUG("Failed to add new OA config\n");
 	return err;
 }
@@ -3358,16 +3349,10 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 		goto config_err;
 	}
 
-	if (oa_config->in_use) {
-		DRM_DEBUG("Failed to remove in use OA config\n");
-		ret = -EADDRINUSE;
-		goto config_err;
-	}
-
 	GEM_BUG_ON(*arg != oa_config->id);
 
 	idr_remove(&dev_priv->perf.metrics_idr, *arg);
-	destroy_config(oa_config->id, oa_config, dev_priv);
+	put_oa_config(dev_priv, oa_config);
 
 config_err:
 	mutex_unlock(&dev_priv->perf.metrics_lock);
