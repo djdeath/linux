@@ -1687,6 +1687,19 @@ static int gen8_emit_oa_config(struct drm_i915_gem_request *req,
 	*cs++ = MI_NOOP;
 	intel_ring_advance(req, cs);
 
+	if (oa_config) {
+		cs = intel_ring_begin(req, 4);
+		if (IS_ERR(cs))
+			return PTR_ERR(cs);
+
+		*cs++ = MI_STORE_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT;
+		*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(req->engine->mmio_base));
+		*cs++ = intel_hws_seqno_address(req->engine) + 8;
+		*cs++ = 0;
+
+		intel_ring_advance(req, cs);
+	}
+
 	return 0;
 }
 
