@@ -2891,6 +2891,9 @@ void i915_gem_cleanup_early(struct drm_i915_private *dev_priv);
 void i915_gem_load_init_fences(struct drm_i915_private *dev_priv);
 int i915_gem_freeze(struct drm_i915_private *dev_priv);
 int i915_gem_freeze_late(struct drm_i915_private *dev_priv);
+struct intel_engine_cs *i915_gem_engine_from_flags(struct drm_i915_private *dev_priv,
+						   struct drm_file *file,
+						   u64 flags);
 
 void *i915_gem_object_alloc(struct drm_i915_private *dev_priv);
 void i915_gem_object_free(struct drm_i915_gem_object *obj);
