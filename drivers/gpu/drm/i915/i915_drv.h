@@ -2847,6 +2847,9 @@ int i915_gem_execbuffer_ioctl(struct drm_device *dev, void *data,
 			      struct drm_file *file_priv);
 int i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv);
+struct intel_engine_cs *i915_gem_engine_from_flags(struct drm_i915_private *dev_priv,
+						   struct drm_file *file,
+						   u64 flags);
 int i915_gem_busy_ioctl(struct drm_device *dev, void *data,
 			struct drm_file *file_priv);
 int i915_gem_get_caching_ioctl(struct drm_device *dev, void *data,
