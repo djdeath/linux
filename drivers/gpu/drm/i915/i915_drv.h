@@ -801,9 +801,12 @@ struct intel_csr {
 	func(supports_tv); \
 	func(has_ipc);
 
+#define GEN_MAX_SLICES		(6) /* CNL upper bound */
+#define GEN_MAX_SUBSLICES	(7)
+
 struct sseu_dev_info {
 	u8 slice_mask;
-	u8 subslice_mask;
+	u8 subslices_mask[GEN_MAX_SLICES];
 	u8 eu_total;
 	u8 eu_per_subslice;
 	u8 min_eu_in_pool;
@@ -812,11 +815,27 @@ struct sseu_dev_info {
 	u8 has_slice_pg:1;
 	u8 has_subslice_pg:1;
 	u8 has_eu_pg:1;
+
+	/* Topology fields */
+	u8 max_slices;
+	u8 max_subslices;
+	u8 max_eus_per_subslice;
+
+	/* We don't have more than 8 eus per subslice at the moment and as we
+	 * store eus enabled using bits, no need to multiply by eus per
+	 * subslice.
+	 */
+	u8 eu_mask[GEN_MAX_SLICES * GEN_MAX_SUBSLICES];
 };
 
 static inline unsigned int sseu_subslice_total(const struct sseu_dev_info *sseu)
 {
-	return hweight8(sseu->slice_mask) * hweight8(sseu->subslice_mask);
+	unsigned s, total = 0;
+
+	for (s = 0; s < ARRAY_SIZE(sseu->subslices_mask); s++)
+		total += hweight8(sseu->subslices_mask[s]);
+
+	return total;
 }
 
 /* Keep in gen based order, and chronological order within a gen */

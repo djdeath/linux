@@ -412,7 +412,7 @@ static int i915_getparam(struct drm_device *dev, void *data,
 			return -ENODEV;
 		break;
 	case I915_PARAM_SUBSLICE_MASK:
-		value = INTEL_INFO(dev_priv)->sseu.subslice_mask;
+		value = INTEL_INFO(dev_priv)->sseu.subslices_mask[0];
 		if (!value)
 			return -ENODEV;
 		break;
