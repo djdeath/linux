@@ -1618,6 +1618,9 @@ struct drm_i915_perf_oa_config {
 
 struct drm_i915_query_item {
 	__u64 query_id;
+#define DRM_I915_QUERY_SLICE_INFO	0x01
+#define DRM_I915_QUERY_SUBSLICE_INFO	0x02
+#define DRM_I915_QUERY_EU_INFO		0x03
 
 	/*
 	 * When set to zero by userspace, this is filled with the size of the
@@ -1652,6 +1655,74 @@ struct drm_i915_query {
 	 * This point to an array of num_items drm_i915_query_item structures.
 	 */
 	__u64 items_ptr;
+};
+
+#define DRM_I915_BIT(bit) ((__u32)1 << (bit))
+#define DRM_I915_DIV_ROUND_UP(val, div) (((val) + (div) - 1) / (div))
+
+/*
+ * Data written by the kernel with query DRM_I915_QUERY_SLICE_INFO :
+ *
+ * data: each bit indicates whether a slice is available (1) or fused off (0).
+ *       Formula to tell if slice X is available :
+ *
+ *            (data[X / 8] >> (X % 8)) & 1
+ *
+ *       Alternatively, use DRM_I915_QUERY_SLICE_AVAILABLE() to query a
+ *       given subslice's availability.
+ */
+struct drm_i915_query_slice_info {
+	__u32 max_slices;
+
+#define DRM_I915_QUERY_SLICE_AVAILABLE(info, slice) \
+	!!((info)->data[(slice) / 8] & DRM_I915_BIT((slice) % 8))
+	__u8 data[];
+};
+
+/*
+ * Data written by the kernel with query DRM_I915_QUERY_SUBSLICE_INFO :
+ *
+ * data: each bit indicates whether a subslice is available (1) or fused off
+ *       (0). Formula to tell if slice X subslice Y is available :
+ *
+ *            (data[(X * ALIGN(max_subslices, 8) / 8) + Y / 8] >> (Y % 8)) & 1
+ *
+ *       Alternatively, use DRM_I915_QUERY_SUBSLICE_AVAILABLE() to query a
+ *       given subslice's availability.
+ */
+struct drm_i915_query_subslice_info {
+	__u32 max_slices;
+	__u32 max_subslices;
+
+#define DRM_I915_QUERY_SUBSLICE_AVAILABLE(info, slice, subslice) \
+	!!((info)->data[(slice) * DRM_I915_DIV_ROUND_UP((info)->max_subslices, 8) + \
+			(subslice) / 8] & DRM_I915_BIT((subslice) % 8))
+	__u8 data[];
+};
+
+/*
+ * Data written by the kernel with query DRM_I915_QUERY_EU_INFO :
+ *
+ * data: Each bit indicates whether an EU is available (1) or fused off (0).
+ *       Formula to tell if slice X subslice Y eu Z is available :
+ *
+ *           (data[X * max_subslices * ALIGN(max_eus_per_subslice, 8) / 8 +
+ *                 Y * ALIGN(max_eus_per_subslice, 8) / 8 +
+ *                 Z / 8] >> (Z % 8)) & 1
+ *
+ *       Alternatively, use DRM_I915_QUERY_EU_AVAILABLE() to query a given
+ *       EU's availability.
+ */
+struct drm_i915_query_eu_info {
+	__u32 max_slices;
+	__u32 max_subslices;
+	__u32 max_eus_per_subslice;
+
+#define DRM_I915_QUERY_EU_AVAILABLE(info, slice, subslice, eu) \
+	!!((info)->data[(slice) * DRM_I915_DIV_ROUND_UP((info)->max_eus_per_subslice, 8) * (info)->max_subslices + \
+			(subslice) * DRM_I915_DIV_ROUND_UP((info)->max_eus_per_subslice, 8) + \
+			(eu) / 8] & DRM_I915_BIT((eu) % 8))
+	__u8 data[];
 };
 
 #if defined(__cplusplus)
