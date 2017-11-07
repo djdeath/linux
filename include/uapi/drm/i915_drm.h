@@ -1620,6 +1620,7 @@ struct drm_i915_perf_oa_config {
 
 struct drm_i915_query_item {
 	__u64 query_id;
+#define DRM_I915_QUERY_TOPOLOGY_INFO    0x01
 
 	/*
 	 * When set to zero by userspace, this is filled with the size of the
@@ -1654,6 +1655,45 @@ struct drm_i915_query {
 	 * This point to an array of num_items drm_i915_query_item structures.
 	 */
 	__u64 items_ptr;
+};
+
+/*
+ * Data written by the kernel with query DRM_I915_QUERY_TOPOLOGY_INFO :
+ *
+ * data: contains the 3 pieces of information :
+ *
+ * - the slice mask with one bit per slice telling whether a slice is
+ *   available. The availability of slice X can be queried with the following
+ *   formula :
+ *
+ *           (data[X / 8] >> (X % 8)) & 1
+ *
+ * - the subslice mask for each slice with one bit per subslice telling
+ *   whether a subslice is available. The availability of subslice Y in slice
+ *   X can be queried with the following formula :
+ *
+ *           (data[subslice_offset +
+ *                 X * DIV_ROUND_UP(max_subslices, 8) +
+ *                 Y / 8] >> (Y % 8)) & 1
+ *
+ * - the EU mask for each subslice in each slice with one bit per EU telling
+ *   whether an EU is available. The availability of EU Z in subslice Y in
+ *   slice X can be queried with the following formula :
+ *
+ *           (data[eu_offset +
+ *                 X * max_subslices * DIV_ROUND_UP(max_eus_per_subslice, 8) +
+ *                 Y * DIV_ROUND_UP(max_eus_per_subslice, 8) +
+ *                 Z / 8] >> (Z % 8)) & 1
+ */
+struct drm_i915_query_topology_info {
+	__u16 max_slices;
+	__u16 max_subslices;
+	__u16 max_eus_per_subslice;
+
+	__u16 subslice_offset;
+	__u16 eu_offset;
+
+	__u8 data[];
 };
 
 #if defined(__cplusplus)
