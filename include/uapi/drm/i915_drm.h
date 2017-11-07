@@ -1569,6 +1569,61 @@ struct drm_i915_engine_info {
 	__u8 rsvd2[6];
 };
 
+/* Query RCS topology.
+ *
+ * drm_i915_query_info.query_params[0] should be set to one of the
+ * I915_RCS_TOPOLOGY_* define.
+ *
+ * drm_i915_gem_query_info.info_ptr will be written to with
+ * drm_i915_rcs_topology_info.
+ */
+#define I915_QUERY_INFO_RCS_TOPOLOGY	1 /* version 1 */
+
+/* Query RCS slice topology
+ *
+ * The meaning of the drm_i915_rcs_topology_info fields is :
+ *
+ * params[0]: number of slices
+ *
+ * data: Each bit indicates whether a slice is available (1) or fused off (0).
+ * Formula to tell if slice X is available :
+ *
+ *         (data[X / 8] >> (X % 8)) & 1
+ */
+#define I915_RCS_TOPOLOGY_SLICE		0 /* version 1 */
+/* Query RCS subslice topology
+ *
+ * The meaning of the drm_i915_rcs_topology_info fields is :
+ *
+ * params[0]: number of slices
+ * params[1]: slice stride
+ *
+ * data: each bit indicates whether a subslice is available (1) or fused off
+ * (0). Formula to tell if slice X subslice Y is available :
+ *
+ *         (data[(X * params[1]) + Y / 8] >> (Y % 8)) & 1
+ */
+#define I915_RCS_TOPOLOGY_SUBSLICE	1 /* version 1 */
+/* Query RCS EU topology
+ *
+ * The meaning of the drm_i915_rcs_topology_info fields is :
+ *
+ * params[0]: number of slices
+ * params[1]: slice stride
+ * params[2]: subslice stride
+ *
+ * data: Each bit indicates whether a subslice is available (1) or fused off
+ * (0). Formula to tell if slice X subslice Y eu Z is available :
+ *
+ *         (data[X * params[1] + Y * params[2] + Z / 8] >> (Z % 8)) & 1
+ */
+#define I915_RCS_TOPOLOGY_EU		2 /* version 1 */
+
+struct drm_i915_rcs_topology_info {
+	__u32 params[6];
+
+	__u8 data[];
+};
 
 struct drm_i915_query_info {
 	/* in/out: Protocol version requested/supported. When set to 0, the
