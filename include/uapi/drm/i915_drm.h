@@ -1510,6 +1510,12 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_OA_EXPONENT,
 
+	/**
+	 * The value of this property set to 1 requests inclusion of GPU
+	 * timestamp in the perf sample data.
+	 */
+	DRM_I915_PERF_PROP_SAMPLE_GPU_TS,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 
@@ -1576,6 +1582,7 @@ enum drm_i915_perf_record_type {
 	 *     struct drm_i915_perf_record_header header;
 	 *
 	 *     { u32 oa_report[]; } && DRM_I915_PERF_PROP_SAMPLE_OA
+	 *     { u64 gpu_timestamp; } && DRM_I915_PERF_PROP_SAMPLE_GPU_TS
 	 * };
 	 */
 	DRM_I915_PERF_RECORD_SAMPLE = 1,
