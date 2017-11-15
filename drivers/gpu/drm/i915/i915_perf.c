@@ -575,6 +575,26 @@ static int append_oa_status(struct i915_perf_stream *stream,
 }
 
 /**
+ * get_gpu_ts_from_oa_report - Retrieve absolute gpu timestamp from OA report
+ *
+ * Note: We are assuming that we're updating last_gpu_ts frequently enough so
+ * that it's never possible to see multiple overflows before we compare
+ * sample_ts to last_gpu_ts. Since this is significantly large duration
+ * (~6min for 80ns ts base), we can safely assume so.
+ */
+static u64 get_gpu_ts_from_oa_report(struct i915_perf_stream *stream,
+				     const u8 *report)
+{
+	u32 sample_ts = *(u32 *)(report + 4);
+	u32 delta;
+
+	delta = sample_ts - (u32)stream->last_gpu_ts;
+	stream->last_gpu_ts += delta;
+
+	return stream->last_gpu_ts;
+}
+
+/**
  * append_oa_sample - Copies single OA report into userspace read() buffer.
  * @stream: An i915-perf stream opened for OA metrics
  * @buf: destination buffer given by userspace
@@ -622,7 +642,9 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 	}
 
 	if (sample_flags & SAMPLE_GPU_TS) {
-		/* Timestamp to be populated from OA report */
+		/* Timestamp populated from OA report */
+		gpu_ts = get_gpu_ts_from_oa_report(stream, report);
+
 		if (copy_to_user(buf, &gpu_ts, I915_PERF_TS_SAMPLE_SIZE))
 			return -EFAULT;
 	}
@@ -2419,6 +2441,8 @@ static u64 i915_cyclecounter_read(const struct cyclecounter *cc)
 	ts_count = I915_READ64_2x32(GEN4_TIMESTAMP,
 				    GEN7_TIMESTAMP_UDW);
 	intel_runtime_pm_put(dev_priv);
+
+	stream->last_gpu_ts = ts_count;
 
 	return ts_count;
 }

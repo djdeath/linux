@@ -2153,6 +2153,8 @@ struct i915_perf_stream {
 	 */
 	struct i915_oa_config *oa_config;
 
+	u64 last_gpu_ts;
+
 	/**
 	 * System time correlation variables.
 	 */
