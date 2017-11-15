@@ -1516,6 +1516,18 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_SAMPLE_GPU_TS,
 
+	/**
+	 * This property requests inclusion of one of the following system
+	 * clock time in the perf sample data :
+	 *    - CLOCK_REALTIME
+	 *    - CLOCK_REALTIME_COARSE
+	 *    - CLOCK_MONOTONIC
+	 *    - CLOCK_MONOTONIC_COARSE
+	 *    - CLOCK_MONOTONIC_RAW
+	 *    - CLOCK_BOOTTIME
+	 */
+	DRM_I915_PERF_PROP_SAMPLE_SYSTEM_TS,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 
@@ -1583,6 +1595,7 @@ enum drm_i915_perf_record_type {
 	 *
 	 *     { u32 oa_report[]; } && DRM_I915_PERF_PROP_SAMPLE_OA
 	 *     { u64 gpu_timestamp; } && DRM_I915_PERF_PROP_SAMPLE_GPU_TS
+	 *     { u64 system_timestamp; } && DRM_I915_PERF_PROP_SAMPLE_SYSTEM_TS
 	 * };
 	 */
 	DRM_I915_PERF_RECORD_SAMPLE = 1,
