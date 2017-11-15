@@ -336,6 +336,7 @@ static struct i915_oa_format gen8_plus_oa_formats[I915_OA_FORMAT_MAX] = {
 
 #define SAMPLE_OA_REPORT	BIT(0)
 #define SAMPLE_GPU_TS		BIT(1)
+#define SAMPLE_SYSTEM_TS	BIT(2)
 
 /**
  * struct perf_open_properties - for validated properties given to open a stream
@@ -622,6 +623,7 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 	struct drm_i915_perf_record_header header;
 	u32 sample_flags = stream->sample_flags;
 	u64 gpu_ts = 0;
+	u64 system_ts = 0;
 
 	header.type = DRM_I915_PERF_RECORD_SAMPLE;
 	header.pad = 0;
@@ -646,6 +648,23 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 		gpu_ts = get_gpu_ts_from_oa_report(stream, report);
 
 		if (copy_to_user(buf, &gpu_ts, I915_PERF_TS_SAMPLE_SIZE))
+			return -EFAULT;
+		buf += I915_PERF_TS_SAMPLE_SIZE;
+	}
+
+	if (sample_flags & SAMPLE_SYSTEM_TS) {
+		gpu_ts = get_gpu_ts_from_oa_report(stream, report);
+		/*
+		 * XXX: timecounter_cyc2time considers time backwards if delta
+		 * timestamp is more than half the max ns time covered by
+		 * counter. It will be ~35min for 36 bit counter. If this much
+		 * sampling duration is needed we will have to update tc->nsec
+		 * by explicitly reading the timecounter (timecounter_read)
+		 * before this duration.
+		 */
+		system_ts = timecounter_cyc2time(&stream->tc, gpu_ts);
+
+		if (copy_to_user(buf, &system_ts, I915_PERF_TS_SAMPLE_SIZE))
 			return -EFAULT;
 	}
 
@@ -2136,6 +2155,11 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		stream->sample_size += I915_PERF_TS_SAMPLE_SIZE;
 	}
 
+	if (props->sample_flags & SAMPLE_SYSTEM_TS) {
+		stream->sample_flags |= SAMPLE_SYSTEM_TS;
+		stream->sample_size += I915_PERF_TS_SAMPLE_SIZE;
+	}
+
 	dev_priv->perf.oa.oa_buffer.format_size = format_size;
 	if (WARN_ON(dev_priv->perf.oa.oa_buffer.format_size == 0))
 		return -EINVAL;
@@ -2855,6 +2879,9 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 			break;
 		case DRM_I915_PERF_PROP_SAMPLE_GPU_TS:
 			props->sample_flags |= SAMPLE_GPU_TS;
+			break;
+		case DRM_I915_PERF_PROP_SAMPLE_SYSTEM_TS:
+			props->sample_flags |= SAMPLE_SYSTEM_TS;
 			break;
 		case DRM_I915_PERF_PROP_OA_METRICS_SET:
 			if (value == 0) {
