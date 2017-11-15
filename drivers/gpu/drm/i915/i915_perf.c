@@ -293,6 +293,7 @@ static u32 i915_perf_stream_paranoid = true;
 #define OAREPORT_REASON_CTX_SWITCH     (1<<3)
 #define OAREPORT_REASON_CLK_RATIO      (1<<5)
 
+#define I915_PERF_TS_SAMPLE_SIZE	8
 
 /* For sysctl proc_dointvec_minmax of i915_oa_max_sample_rate
  *
@@ -333,7 +334,8 @@ static struct i915_oa_format gen8_plus_oa_formats[I915_OA_FORMAT_MAX] = {
 	[I915_OA_FORMAT_C4_B8]		    = { 7, 64 },
 };
 
-#define SAMPLE_OA_REPORT      (1<<0)
+#define SAMPLE_OA_REPORT	BIT(0)
+#define SAMPLE_GPU_TS		BIT(1)
 
 /**
  * struct perf_open_properties - for validated properties given to open a stream
@@ -599,6 +601,7 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 	int report_size = dev_priv->perf.oa.oa_buffer.format_size;
 	struct drm_i915_perf_record_header header;
 	u32 sample_flags = stream->sample_flags;
+	u64 gpu_ts = 0;
 
 	header.type = DRM_I915_PERF_RECORD_SAMPLE;
 	header.pad = 0;
@@ -614,6 +617,13 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 
 	if (sample_flags & SAMPLE_OA_REPORT) {
 		if (copy_to_user(buf, report, report_size))
+			return -EFAULT;
+		buf += report_size;
+	}
+
+	if (sample_flags & SAMPLE_GPU_TS) {
+		/* Timestamp to be populated from OA report */
+		if (copy_to_user(buf, &gpu_ts, I915_PERF_TS_SAMPLE_SIZE))
 			return -EFAULT;
 	}
 
@@ -2099,6 +2109,11 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	stream->sample_flags |= SAMPLE_OA_REPORT;
 	stream->sample_size += format_size;
 
+	if (props->sample_flags & SAMPLE_GPU_TS) {
+		stream->sample_flags |= SAMPLE_GPU_TS;
+		stream->sample_size += I915_PERF_TS_SAMPLE_SIZE;
+	}
+
 	dev_priv->perf.oa.oa_buffer.format_size = format_size;
 	if (WARN_ON(dev_priv->perf.oa.oa_buffer.format_size == 0))
 		return -EINVAL;
@@ -2813,6 +2828,9 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 			break;
 		case DRM_I915_PERF_PROP_SAMPLE_OA:
 			props->sample_flags |= SAMPLE_OA_REPORT;
+			break;
+		case DRM_I915_PERF_PROP_SAMPLE_GPU_TS:
+			props->sample_flags |= SAMPLE_GPU_TS;
 			break;
 		case DRM_I915_PERF_PROP_OA_METRICS_SET:
 			if (value == 0) {
