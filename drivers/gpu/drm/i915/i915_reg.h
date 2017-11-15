@@ -8884,6 +8884,12 @@ enum skl_power_gate {
 
 /* Gen4+ Timestamp and Pipe Frame time stamp registers */
 #define GEN4_TIMESTAMP		_MMIO(0x2358)
+#define GEN7_TIMESTAMP_UDW	_MMIO(0x235C)
+#define PRE_GEN7_TIMESTAMP_WIDTH	32
+#define GEN7_TIMESTAMP_WIDTH		36
+#define CS_TIMESTAMP_WIDTH(dev_priv) \
+	(INTEL_GEN(dev_priv) < 7 ? PRE_GEN7_TIMESTAMP_WIDTH : \
+				   GEN7_TIMESTAMP_WIDTH)
 #define ILK_TIMESTAMP_HI	_MMIO(0x70070)
 #define IVB_TIMESTAMP_CTR	_MMIO(0x44070)
 

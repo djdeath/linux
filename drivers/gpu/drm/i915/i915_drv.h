@@ -44,6 +44,7 @@
 #include <linux/pm_qos.h>
 #include <linux/reservation.h>
 #include <linux/shmem_fs.h>
+#include <linux/timecounter.h>
 
 #include <drm/drmP.h>
 #include <drm/intel-gtt.h>
@@ -2151,6 +2152,14 @@ struct i915_perf_stream {
 	 * @oa_config: The OA configuration used by the stream.
 	 */
 	struct i915_oa_config *oa_config;
+
+	/**
+	 * System time correlation variables.
+	 */
+	struct cyclecounter cc;
+	spinlock_t systime_lock;
+	struct timespec64 start_systime;
+	struct timecounter tc;
 };
 
 /**

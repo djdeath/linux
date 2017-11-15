@@ -192,6 +192,7 @@
  */
 
 #include <linux/anon_inodes.h>
+#include <linux/clocksource.h>
 #include <linux/sizes.h>
 #include <linux/uuid.h>
 
@@ -2390,6 +2391,56 @@ static unsigned int i915_perf_poll(struct file *file, poll_table *wait)
 }
 
 /**
+ * i915_cyclecounter_read - read raw cycle/timestamp counter
+ * @cc: cyclecounter structure
+ */
+static u64 i915_cyclecounter_read(const struct cyclecounter *cc)
+{
+	struct i915_perf_stream *stream = container_of(cc, typeof(*stream), cc);
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+	u64 ts_count;
+
+	intel_runtime_pm_get(dev_priv);
+	ts_count = I915_READ64_2x32(GEN4_TIMESTAMP,
+				    GEN7_TIMESTAMP_UDW);
+	intel_runtime_pm_put(dev_priv);
+
+	return ts_count;
+}
+
+static void i915_perf_init_cyclecounter(struct i915_perf_stream *stream)
+{
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+	int cs_ts_freq = dev_priv->perf.oa.timestamp_frequency;
+	struct cyclecounter *cc = &stream->cc;
+	u32 maxsec;
+
+	cc->read = i915_cyclecounter_read;
+	cc->mask = CYCLECOUNTER_MASK(CS_TIMESTAMP_WIDTH(dev_priv));
+	maxsec = cc->mask / cs_ts_freq;
+
+	clocks_calc_mult_shift(&cc->mult, &cc->shift, cs_ts_freq,
+			       NSEC_PER_SEC, maxsec);
+}
+
+static void i915_perf_init_timecounter(struct i915_perf_stream *stream)
+{
+#define SYSTIME_START_OFFSET	350000 /* Counter read takes about 350us */
+	unsigned long flags;
+	u64 ns;
+
+	i915_perf_init_cyclecounter(stream);
+	spin_lock_init(&stream->systime_lock);
+
+	getnstimeofday64(&stream->start_systime);
+	ns = timespec64_to_ns(&stream->start_systime) + SYSTIME_START_OFFSET;
+
+	spin_lock_irqsave(&stream->systime_lock, flags);
+	timecounter_init(&stream->tc, &stream->cc, ns);
+	spin_unlock_irqrestore(&stream->systime_lock, flags);
+}
+
+/**
  * i915_perf_enable_locked - handle `I915_PERF_IOCTL_ENABLE` ioctl
  * @stream: A disabled i915 perf stream
  *
@@ -2406,6 +2457,8 @@ static void i915_perf_enable_locked(struct i915_perf_stream *stream)
 
 	/* Allow stream->ops->enable() to refer to this */
 	stream->enabled = true;
+
+	i915_perf_init_timecounter(stream);
 
 	if (stream->ops->enable)
 		stream->ops->enable(stream);
