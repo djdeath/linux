@@ -1593,9 +1593,9 @@ enum drm_i915_perf_record_type {
 	 * struct {
 	 *     struct drm_i915_perf_record_header header;
 	 *
-	 *     { u32 oa_report[]; } && DRM_I915_PERF_PROP_SAMPLE_OA
 	 *     { u64 gpu_timestamp; } && DRM_I915_PERF_PROP_SAMPLE_GPU_TS
 	 *     { u64 system_timestamp; } && DRM_I915_PERF_PROP_SAMPLE_SYSTEM_TS
+	 *     { u32 oa_report[]; } && DRM_I915_PERF_PROP_SAMPLE_OA
 	 * };
 	 */
 	DRM_I915_PERF_RECORD_SAMPLE = 1,
