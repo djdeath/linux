@@ -1486,13 +1486,12 @@ struct i915_perf_stream {
 
 	u64 last_gpu_ts;
 
+	u64 last_system_ts;
+
 	/**
 	 * System time correlation variables.
 	 */
-	struct cyclecounter cc;
 	spinlock_t systime_lock;
-	struct timespec64 start_systime;
-	struct timecounter tc;
 };
 
 /**

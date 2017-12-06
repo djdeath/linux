@@ -585,15 +585,31 @@ static int append_oa_status(struct i915_perf_stream *stream,
  * (~6min for 80ns ts base), we can safely assume so.
  */
 static u64 get_gpu_ts_from_oa_report(struct i915_perf_stream *stream,
-				     const u8 *report)
+				     const u8 *report,
+				     u64 *delta_ts)
 {
-	u32 sample_ts = *(u32 *)(report + 4);
-	u32 delta;
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+	u32 sample_ts = ((const u32 *)report)[1];
 
-	delta = sample_ts - (u32)stream->last_gpu_ts;
-	stream->last_gpu_ts += delta;
+	*delta_ts = sample_ts - (u32)(stream->last_gpu_ts & 0xffffffff);
+	stream->last_gpu_ts += *delta_ts;
+
+	if (stream->last_gpu_ts > ((1ULL << CS_TIMESTAMP_WIDTH(dev_priv)) - 1))
+		stream->last_gpu_ts -= 1ULL << CS_TIMESTAMP_WIDTH(dev_priv);
 
 	return stream->last_gpu_ts;
+}
+
+static u64 get_system_ts_from_oa_delta(struct i915_perf_stream *stream,
+				       u64 delta_ts)
+{
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	stream->last_system_ts +=
+		div64_u64(delta_ts * NSEC_PER_SEC,
+			  1000ULL * INTEL_INFO(dev_priv)->cs_timestamp_frequency_khz);
+
+	return stream->last_system_ts;
 }
 
 /**
@@ -623,8 +639,9 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 	int report_size = dev_priv->perf.oa.oa_buffer.format_size;
 	struct drm_i915_perf_record_header header;
 	u32 sample_flags = stream->sample_flags;
-	u64 gpu_ts = 0;
-	u64 system_ts = 0;
+	u64 delta_ts = 0;
+	u64 gpu_ts = get_gpu_ts_from_oa_report(stream, report, &delta_ts);
+	u64 system_ts = get_system_ts_from_oa_delta(stream, delta_ts);
 
 	header.type = DRM_I915_PERF_RECORD_SAMPLE;
 	header.pad = 0;
@@ -638,36 +655,28 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 		return -EFAULT;
 	buf += sizeof(header);
 
-	if (sample_flags & SAMPLE_OA_REPORT) {
-		if (copy_to_user(buf, report, report_size))
-			return -EFAULT;
-		buf += report_size;
-	}
-
 	if (sample_flags & SAMPLE_GPU_TS) {
 		/* Timestamp populated from OA report */
-		gpu_ts = get_gpu_ts_from_oa_report(stream, report);
-
-		if (copy_to_user(buf, &gpu_ts, I915_PERF_TS_SAMPLE_SIZE))
+		if (copy_to_user(buf, &gpu_ts, sizeof(gpu_ts)))
 			return -EFAULT;
-		buf += I915_PERF_TS_SAMPLE_SIZE;
+		buf += sizeof(gpu_ts);
 	}
 
 	if (sample_flags & SAMPLE_SYSTEM_TS) {
-		gpu_ts = get_gpu_ts_from_oa_report(stream, report);
-		/*
-		 * XXX: timecounter_cyc2time considers time backwards if delta
-		 * timestamp is more than half the max ns time covered by
-		 * counter. It will be ~35min for 36 bit counter. If this much
-		 * sampling duration is needed we will have to update tc->nsec
-		 * by explicitly reading the timecounter (timecounter_read)
-		 * before this duration.
-		 */
-		system_ts = timecounter_cyc2time(&stream->tc, gpu_ts);
-
-		if (copy_to_user(buf, &system_ts, I915_PERF_TS_SAMPLE_SIZE))
+		if (copy_to_user(buf, &system_ts, sizeof(system_ts)))
 			return -EFAULT;
+		buf += sizeof(system_ts);
 	}
+
+	if (sample_flags & SAMPLE_OA_REPORT) {
+		if (copy_to_user(buf, report, report_size))
+			return -EFAULT;
+
+		buf += report_size;
+	}
+
+	/* DRM_ERROR("gpu_ts=%llx system_ts=%llx report=%x delta_ts=%llu\n", */
+	/*	  gpu_ts, system_ts, ((const u32 *)report)[1], delta_ts); */
 
 	(*offset) += header.size;
 
@@ -2198,12 +2207,12 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 
 	if (props->sample_flags & SAMPLE_GPU_TS) {
 		stream->sample_flags |= SAMPLE_GPU_TS;
-		stream->sample_size += I915_PERF_TS_SAMPLE_SIZE;
+		stream->sample_size += sizeof(u64);
 	}
 
 	if (props->sample_flags & SAMPLE_SYSTEM_TS) {
 		stream->sample_flags |= SAMPLE_SYSTEM_TS;
-		stream->sample_size += I915_PERF_TS_SAMPLE_SIZE;
+		stream->sample_size += sizeof(u64);
 	}
 
 	dev_priv->perf.oa.oa_buffer.format_size = format_size;
@@ -2501,56 +2510,31 @@ static __poll_t i915_perf_poll(struct file *file, poll_table *wait)
 	return ret;
 }
 
-/**
- * i915_cyclecounter_read - read raw cycle/timestamp counter
- * @cc: cyclecounter structure
- */
-static u64 i915_cyclecounter_read(const struct cyclecounter *cc)
-{
-	struct i915_perf_stream *stream = container_of(cc, typeof(*stream), cc);
-	struct drm_i915_private *dev_priv = stream->dev_priv;
-	u64 ts_count;
-
-	intel_runtime_pm_get(dev_priv);
-	ts_count = I915_READ64_2x32(GEN4_TIMESTAMP,
-				    GEN7_TIMESTAMP_UDW);
-	intel_runtime_pm_put(dev_priv);
-
-	stream->last_gpu_ts = ts_count;
-
-	return ts_count;
-}
-
-static void i915_perf_init_cyclecounter(struct i915_perf_stream *stream)
-{
-	struct drm_i915_private *dev_priv = stream->dev_priv;
-	int cs_ts_freq = dev_priv->perf.oa.timestamp_frequency;
-	struct cyclecounter *cc = &stream->cc;
-	u32 maxsec;
-
-	cc->read = i915_cyclecounter_read;
-	cc->mask = CYCLECOUNTER_MASK(CS_TIMESTAMP_WIDTH(dev_priv));
-	maxsec = cc->mask / cs_ts_freq;
-
-	clocks_calc_mult_shift(&cc->mult, &cc->shift, cs_ts_freq,
-			       NSEC_PER_SEC, maxsec);
-}
-
 static void i915_perf_init_timecounter(struct i915_perf_stream *stream)
 {
-#define SYSTIME_START_OFFSET	350000 /* Counter read takes about 350us */
+	struct drm_i915_private *dev_priv = stream->dev_priv;
 	unsigned long flags;
-	u64 ns;
+	u64 ns0, ns1;
 
-	i915_perf_init_cyclecounter(stream);
 	spin_lock_init(&stream->systime_lock);
 
-	getnstimeofday64(&stream->start_systime);
-	ns = timespec64_to_ns(&stream->start_systime) + SYSTIME_START_OFFSET;
+	intel_runtime_pm_get(dev_priv);
 
 	spin_lock_irqsave(&stream->systime_lock, flags);
-	timecounter_init(&stream->tc, &stream->cc, ns);
+
+	ns0 = ktime_get_mono_fast_ns();
+	stream->last_gpu_ts = I915_READ64_2x32(RING_TIMESTAMP(RENDER_RING_BASE),
+					       RING_TIMESTAMP_UDW(RENDER_RING_BASE));
+	ns1 = ktime_get_mono_fast_ns();
+
 	spin_unlock_irqrestore(&stream->systime_lock, flags);
+
+	intel_runtime_pm_put(dev_priv);
+
+	DRM_DEBUG("Timestamp correlation cpu: ns0=%llu, ns1=%llu, delta=%llu gpu: %llu\n",
+		  ns0, ns1, ns1 - ns0, stream->last_gpu_ts);
+
+	stream->last_system_ts = div64_ul(ns1 + ns0, 2UL);
 }
 
 /**
