@@ -1397,6 +1397,8 @@ struct i915_perf_stream {
 
 	u64 last_gpu_ts;
 
+	u64 last_system_ts;
+
 	/**
 	 * @poll_oa_period: The period in nanoseconds at which the OA
 	 * buffer should be checked for available data.
@@ -1412,10 +1414,7 @@ struct i915_perf_stream {
 	/**
 	 * System time correlation variables.
 	 */
-	struct cyclecounter cc;
 	spinlock_t systime_lock;
-	struct timespec64 start_systime;
-	struct timecounter tc;
 };
 
 /**
