@@ -3627,6 +3627,9 @@ extern void i915_perf_fini(struct drm_i915_private *dev_priv);
 extern void i915_perf_register(struct drm_i915_private *dev_priv);
 extern void i915_perf_unregister(struct drm_i915_private *dev_priv);
 
+/* i915_query.c */
+int i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+
 /* i915_suspend.c */
 extern int i915_save_state(struct drm_i915_private *dev_priv);
 extern int i915_restore_state(struct drm_i915_private *dev_priv);
