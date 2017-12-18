@@ -578,6 +578,7 @@ static void err_print_capabilities(struct drm_i915_error_state_buf *m,
 	struct drm_printer p = i915_error_printer(m);
 
 	intel_device_info_dump_flags(info, &p);
+	intel_device_info_dump_topology(&info->sseu, &p);
 }
 
 static void err_print_params(struct drm_i915_error_state_buf *m,
