@@ -1062,6 +1062,13 @@ static void clflush_write32(u32 *addr, u32 value, unsigned int flushes)
 		*addr = value;
 }
 
+static void fill_request_pid(struct drm_i915_gem_request *rq,
+			     struct drm_file *file)
+{
+	rq->pid = task_tgid_vnr(current);
+	rq->tid = task_pid_vnr(current);
+}
+
 static int __reloc_gpu_alloc(struct i915_execbuffer *eb,
 			     struct i915_vma *vma,
 			     unsigned int len)
@@ -1106,6 +1113,8 @@ static int __reloc_gpu_alloc(struct i915_execbuffer *eb,
 		err = PTR_ERR(rq);
 		goto err_unpin;
 	}
+
+	fill_request_pid(rq, eb->file);
 
 	err = i915_gem_request_await_object(rq, vma->obj, true);
 	if (err)
@@ -2368,6 +2377,8 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 		err = PTR_ERR(eb.request);
 		goto err_batch_unpin;
 	}
+
+	fill_request_pid(eb.request, eb.file);
 
 	if (in_fence) {
 		err = i915_gem_request_await_dma_fence(eb.request, in_fence);

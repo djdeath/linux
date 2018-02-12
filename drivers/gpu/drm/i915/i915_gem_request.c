@@ -750,6 +750,9 @@ i915_gem_request_alloc(struct intel_engine_cs *engine,
 	/* No zalloc, must clear what we need by hand */
 	req->hw_id = INVALID_CONTEXT_HW_ID;
 
+	req->pid = ctx == dev_priv->kernel_context ? 0 : -1;
+	req->tid = -1;
+
 	req->global_seqno = 0;
 	req->signaling.wait.seqno = 0;
 	req->file_priv = NULL;

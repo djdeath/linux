@@ -162,6 +162,12 @@ struct drm_i915_gem_request {
 	 */
 	u32 hw_id;
 
+	/* Process & thread id, set on execbuffer, left to 0 when associated
+	 * with the kernel.
+	 */
+	s32 pid;
+	s32 tid;
+
 	/** Position in the ring of the start of the request */
 	u32 head;
 
