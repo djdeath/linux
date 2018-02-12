@@ -2096,6 +2096,7 @@ struct drm_i915_private {
 		 */
 		struct ida hw_ida;
 #define MAX_CONTEXT_HW_ID (1<<21) /* exclusive */
+#define INVALID_CONTEXT_HW_ID (0xffffffff)
 	} contexts;
 
 	u32 fdi_rx_config;

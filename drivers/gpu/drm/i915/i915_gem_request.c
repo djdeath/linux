@@ -748,6 +748,8 @@ i915_gem_request_alloc(struct intel_engine_cs *engine,
 	req->ring = ring;
 
 	/* No zalloc, must clear what we need by hand */
+	req->hw_id = INVALID_CONTEXT_HW_ID;
+
 	req->global_seqno = 0;
 	req->signaling.wait.seqno = 0;
 	req->file_priv = NULL;
@@ -1001,6 +1003,8 @@ void __i915_add_request(struct drm_i915_gem_request *request, bool flush_caches)
 	 * us, the timeline will hold its seqno which is later than ours.
 	 */
 	GEM_BUG_ON(timeline->seqno != request->fence.seqno);
+
+	request->hw_id = request->ctx->hw_id;
 
 	/*
 	 * To ensure that this call will not fail, space for its emissions
