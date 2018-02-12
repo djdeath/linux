@@ -216,6 +216,12 @@
  */
 #define OA_BUFFER_SIZE		SZ_16M
 
+/*
+ * Choose an request buffer size based upon the OA buffer size so that the OA
+ * buffer overflow before the requests buffer.
+ */
+#define OA_BUFFER_REPORTS	(OA_BUFFER_SIZE / 256)
+
 #define OA_TAKEN(tail, head)	((tail - head) & (OA_BUFFER_SIZE - 1))
 
 /**
@@ -333,6 +339,7 @@ static struct i915_oa_format gen8_plus_oa_formats[I915_OA_FORMAT_MAX] = {
 };
 
 #define SAMPLE_OA_REPORT      (1<<0)
+#define SAMPLE_PID_REPORT     (1<<1)
 
 /**
  * struct perf_open_properties - for validated properties given to open a stream
@@ -405,6 +412,189 @@ static int get_oa_config(struct drm_i915_private *dev_priv,
 		atomic_inc(&(*out_config)->ref_count);
 
 	mutex_unlock(&dev_priv->perf.metrics_lock);
+
+	return ret;
+}
+
+static void reset_intel_perf_request(struct intel_perf_request *req)
+{
+	req->hw_id = INVALID_CTX_ID;
+	req->pid = -1;
+	req->tid = -1;
+}
+
+/* This function transfers ownership of the request to the caller. */
+static u32 advance_perf_engine_request(struct drm_i915_private *dev_priv,
+				       struct intel_engine_cs *engine,
+				       u32 tail,
+				       u32 report_hw_id,
+				       u32 report_ts,
+				       struct intel_perf_request *req)
+{
+	u32 head;
+
+	if (!engine->perf.requests_vma)
+		return tail;
+
+	/* DRM_ERROR(" <==== advance hw_id oa=0x%x report_ts=0x%x\n", */
+	/*	  report_hw_id, report_ts); */
+
+	if (report_hw_id == INVALID_CTX_ID) {
+		/* DRM_ERROR("\t invalid, clearing"); */
+		reset_intel_perf_request(req);
+		return tail;
+	}
+
+	head = atomic_read(&engine->perf.head);
+
+	/*
+	 * Because we schedule a NOOP on the kernel context before the OA unit
+	 * is enabled, it's possible we don't see a report for that
+	 * request. As a first step, skip all request that do not match the
+	 * first OA report's hw_id.
+	 */
+	if (!engine->perf.synced) {
+		if (report_hw_id == 0) {
+			req->hw_id = 0;
+			req->pid = 0;
+			req->tid = -1;
+			/* DRM_ERROR("\t 0req=0x%x\n", req->hw_id); */
+			return tail;
+		}
+		while (head != tail) {
+			*req = engine->perf.requests[tail];
+			tail = (tail + 1) % engine->perf.max_requests;
+
+			/* DRM_ERROR("\t 1req=0x%x\n", req->hw_id); */
+			if (req->hw_id == report_hw_id)
+				break;
+		}
+		engine->perf.synced = true;
+	} else {
+		/* DRM_ERROR("\t 2req=0x%x\n", engine->perf.requests[tail].hw_id); */
+
+		*req = engine->perf.requests[tail];
+		tail = (tail + 1) % engine->perf.max_requests;
+
+		WARN_ON(req->hw_id != report_hw_id);
+	}
+
+	return tail;
+}
+
+static bool engine_requests_buffer_overflow(struct intel_engine_cs *engine)
+{
+	if (!engine->perf.requests_vma)
+		return false;
+
+	return atomic_read(&engine->perf.overflow) != 0;
+}
+
+static void reset_engine_requests(struct intel_engine_cs *engine)
+{
+	engine->perf.last_request.hw_id = INVALID_CTX_ID;
+	engine->perf.last_request.pid = -1;
+	engine->perf.last_request.tid = -1;
+
+	engine->perf.synced = false;
+
+	atomic_set(&engine->perf.head, 0);
+	atomic_set(&engine->perf.tail, 0);
+	atomic_set(&engine->perf.overflow, 0);
+}
+
+static int submit_and_wait_engine_request(struct intel_engine_cs *engine,
+					  u32 op,
+					  i915_reg_t oa_register,
+					  u32 oa_register_value)
+{
+	struct drm_i915_private *dev_priv = engine->i915;
+	struct drm_i915_gem_request *req;
+	struct i915_vma *oa_buffer_vma = dev_priv->perf.oa.oa_buffer.vma;
+	u32 *cs;
+	int ret;
+
+	mutex_lock(&dev_priv->drm.struct_mutex);
+
+	req = i915_gem_request_alloc(engine, dev_priv->kernel_context);
+	if (IS_ERR(req)) {
+		ret = PTR_ERR(req);
+		goto out;
+	}
+
+	cs = intel_ring_begin(req, 14);
+	if (IS_ERR(cs)) {
+		ret = PTR_ERR(cs);
+		i915_add_request(req);
+		goto out;
+	}
+
+	req->submit_operation = op;
+
+	*cs++ = MI_STORE_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT;
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(engine->mmio_base));
+	*cs++ = i915_ggtt_offset(oa_buffer_vma) + OA_BUFFER_SIZE;
+	*cs++ = 0;
+
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(oa_register);
+	*cs++ = oa_register_value;
+
+	/*
+	 * Flush the preceding LRI, so that we're sure the OA unit has been
+	 * enabled when the request has completed.
+	 */
+	cs = gen8_emit_pipe_control(cs,
+				    PIPE_CONTROL_CS_STALL |
+				    PIPE_CONTROL_MMIO_WRITE,
+				    0);
+	*cs++ = MI_NOOP;
+
+	intel_ring_advance(req, cs);
+
+	i915_gem_request_get(req);
+
+	i915_add_request(req);
+
+	ret = i915_gem_active_wait(&engine->timeline->last_request,
+				   I915_WAIT_LOCKED);
+
+	i915_gem_request_put(req);
+
+ out:
+	mutex_unlock(&dev_priv->drm.struct_mutex);
+
+	return ret;
+}
+
+static int start_engine_requests(struct intel_engine_cs *engine,
+				 i915_reg_t oa_register,
+				 u32 oa_register_value)
+{
+	GEM_BUG_ON(!engine->perf.requests_vma);
+
+	atomic_set(&engine->perf.debug, 1);
+
+	reset_engine_requests(engine);
+	return submit_and_wait_engine_request(engine,
+					      I915_REQUEST_OP_PERF_RECORD_START,
+					      oa_register, oa_register_value);
+}
+
+static int stop_engine_requests(struct intel_engine_cs *engine,
+				i915_reg_t oa_register,
+				u32 oa_register_value)
+{
+	int ret;
+
+	GEM_BUG_ON(!engine->perf.requests_vma);
+
+	ret = submit_and_wait_engine_request(engine,
+					     I915_REQUEST_OP_PERF_RECORD_STOP,
+					     oa_register, oa_register_value);
+	reset_engine_requests(engine);
+
+	atomic_set(&engine->perf.debug, 0);
 
 	return ret;
 }
@@ -592,7 +782,8 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 			    char __user *buf,
 			    size_t count,
 			    size_t *offset,
-			    const u8 *report)
+			    const u8 *report,
+			    const struct intel_perf_request *request)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 	int report_size = dev_priv->perf.oa.oa_buffer.format_size;
@@ -610,6 +801,20 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 	if (copy_to_user(buf, &header, sizeof(header)))
 		return -EFAULT;
 	buf += sizeof(header);
+
+	if (sample_flags & SAMPLE_PID_REPORT) {
+		s32 pid_report[2] = {
+			request ? request->pid : -1,
+			request ? request->tid : -1
+		};
+
+		/* DRM_ERROR(" <==== add pid report hw_id=0x%x pid=%i\n", */
+		/*	  ((u32*)report)[2], pid_report[0]); */
+
+		if (copy_to_user(buf, pid_report, sizeof(pid_report)))
+			return -EFAULT;
+		buf += sizeof(pid_report);
+	}
 
 	if (sample_flags & SAMPLE_OA_REPORT) {
 		if (copy_to_user(buf, report, report_size))
@@ -658,6 +863,9 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 	u32 taken;
 	int ret = 0;
 
+	struct intel_perf_request current_request;
+	u32 current_requests_tail;
+
 	if (WARN_ON(!stream->enabled))
 		return -EIO;
 
@@ -668,6 +876,9 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 	tail = dev_priv->perf.oa.oa_buffer.tails[aged_tail_idx].offset;
 
 	spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
+
+	current_requests_tail = atomic_read(&dev_priv->engine[RCS]->perf.tail);
+	current_request = dev_priv->engine[RCS]->perf.last_request;
 
 	/*
 	 * An invalid tail pointer here means we're still waiting for the poll
@@ -790,6 +1001,9 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		    (dev_priv->perf.oa.oa_buffer.last_ctx_id ==
 		     dev_priv->perf.oa.specific_ctx_id) ||
 		    reason & OAREPORT_REASON_CTX_SWITCH) {
+			struct intel_engine_cs *engine = dev_priv->engine[RCS];
+			struct intel_perf_request updated_request = current_request;
+			u32 updated_requests_tail = current_requests_tail;
 
 			/*
 			 * While filtering for a single context we avoid
@@ -800,11 +1014,25 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 				report32[2] = INVALID_CTX_ID;
 			}
 
-			ret = append_oa_sample(stream, buf, count, offset,
-					       report);
+			if (reason & OAREPORT_REASON_CTX_SWITCH) {
+				updated_requests_tail =
+					advance_perf_engine_request(dev_priv,
+								    engine,
+								    current_requests_tail,
+								    ctx_id,
+								    report32[1],
+								    &updated_request);
+			} else if (ctx_id == INVALID_CTX_ID)
+				reset_intel_perf_request(&updated_request);
+
+			ret = append_oa_sample(stream, buf, count,
+					       offset, report,
+					       &updated_request);
 			if (ret)
 				break;
 
+			current_request = updated_request;
+			current_requests_tail = updated_requests_tail;
 			dev_priv->perf.oa.oa_buffer.last_ctx_id = ctx_id;
 		}
 
@@ -831,6 +1059,9 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		dev_priv->perf.oa.oa_buffer.head = head;
 
 		spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
+
+		atomic_set(&dev_priv->engine[RCS]->perf.tail, current_requests_tail);
+		dev_priv->engine[RCS]->perf.last_request = current_request;
 	}
 
 	return ret;
@@ -884,9 +1115,13 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 	 * buffer, then a buffer overflow does anyway likely indicate
 	 * that something has gone quite badly wrong.
 	 */
-	if (oastatus & GEN8_OASTATUS_OABUFFER_OVERFLOW) {
+	if (oastatus & GEN8_OASTATUS_OABUFFER_OVERFLOW ||
+	    engine_requests_buffer_overflow(dev_priv->engine[RCS])) {
 		ret = append_oa_status(stream, buf, count, offset,
 				       DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+		DRM_ERROR("OA buffer overflow (exponent = %d): force restart\n",
+			  dev_priv->perf.oa.period_exponent);
+
 		if (ret)
 			return ret;
 
@@ -906,6 +1141,8 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 	if (oastatus & GEN8_OASTATUS_REPORT_LOST) {
 		ret = append_oa_status(stream, buf, count, offset,
 				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
+		DRM_ERROR("OA report lost\n");
+
 		if (ret)
 			return ret;
 		I915_WRITE(GEN8_OASTATUS,
@@ -1019,7 +1256,7 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 			continue;
 		}
 
-		ret = append_oa_sample(stream, buf, count, offset, report);
+		ret = append_oa_sample(stream, buf, count, offset, report, NULL);
 		if (ret)
 			break;
 
@@ -1276,8 +1513,7 @@ static void oa_put_render_ctx_id(struct i915_perf_stream *stream)
 	}
 }
 
-static void
-free_oa_buffer(struct drm_i915_private *i915)
+static void free_oa_buffer(struct drm_i915_private *i915)
 {
 	mutex_lock(&i915->drm.struct_mutex);
 
@@ -1289,6 +1525,19 @@ free_oa_buffer(struct drm_i915_private *i915)
 	i915->perf.oa.oa_buffer.vaddr = NULL;
 
 	mutex_unlock(&i915->drm.struct_mutex);
+}
+
+static void free_engine_requests_buffer_locked(struct intel_engine_cs *engine)
+{
+	if (!engine->perf.requests_vma)
+		return;
+
+	i915_gem_object_unpin_map(engine->perf.requests_vma->obj);
+	i915_vma_unpin(engine->perf.requests_vma);
+	i915_gem_object_put(engine->perf.requests_vma->obj);
+
+	engine->perf.requests = NULL;
+	engine->perf.requests_vma = NULL;
 }
 
 static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
@@ -1308,6 +1557,7 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	dev_priv->perf.oa.ops.disable_metric_set(dev_priv);
 
 	free_oa_buffer(dev_priv);
+	free_engine_requests_buffer_locked(dev_priv->engine[RCS]);
 
 	intel_uncore_forcewake_put(dev_priv, FORCEWAKE_ALL);
 	intel_runtime_pm_put(dev_priv);
@@ -1458,7 +1708,7 @@ static int alloc_oa_buffer(struct drm_i915_private *dev_priv)
 		goto err_unref;
 
 	/* PreHSW required 512K alignment, HSW requires 16M */
-	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, SZ_16M, 0);
+	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, OA_BUFFER_SIZE, 0);
 	if (IS_ERR(vma)) {
 		ret = PTR_ERR(vma);
 		goto err_unref;
@@ -1929,6 +2179,7 @@ static void gen8_oa_enable(struct drm_i915_private *dev_priv,
 			   struct i915_perf_stream *stream)
 {
 	u32 report_format = dev_priv->perf.oa.oa_buffer.format;
+	u32 oa_control;
 
 	/*
 	 * Reset buf pointers so we don't forward reports from before now.
@@ -1946,9 +2197,21 @@ static void gen8_oa_enable(struct drm_i915_private *dev_priv,
 	 * filtering and instead filter on the cpu based on the context-id
 	 * field of reports
 	 */
-	I915_WRITE(GEN8_OACONTROL, (report_format <<
-				    GEN8_OA_REPORT_FORMAT_SHIFT) |
-				   GEN8_OA_COUNTER_ENABLE);
+	oa_control = (report_format << GEN8_OA_REPORT_FORMAT_SHIFT) |
+		GEN8_OA_COUNTER_ENABLE;
+	if (stream->sample_flags & SAMPLE_PID_REPORT) {
+		int ret;
+
+		ret = start_engine_requests(dev_priv->engine[RCS],
+					    GEN8_OACONTROL, oa_control);
+		if (WARN_ON(ret)) {
+			ret = stop_engine_requests(dev_priv->engine[RCS],
+						   GEN8_OACONTROL, 0);
+			WARN_ON(ret);
+		}
+	} else {
+		I915_WRITE(GEN8_OACONTROL, oa_control);
+	}
 }
 
 /**
@@ -1981,7 +2244,7 @@ static void gen7_oa_disable(struct drm_i915_private *dev_priv,
 static void gen8_oa_disable(struct drm_i915_private *dev_priv,
 			    struct i915_perf_stream *stream)
 {
-	I915_WRITE(GEN8_OACONTROL, 0);
+	stop_engine_requests(dev_priv->engine[RCS], GEN8_OACONTROL, 0);
 }
 
 /**
@@ -2010,6 +2273,62 @@ static const struct i915_perf_stream_ops i915_oa_stream_ops = {
 	.poll_wait = i915_oa_poll_wait,
 	.read = i915_oa_read,
 };
+
+static int alloc_engine_requests_buffer_locked(struct intel_engine_cs *engine)
+{
+	struct drm_i915_gem_object *bo;
+	struct i915_vma *vma;
+	u32 buffer_size = OA_BUFFER_REPORTS * sizeof(*engine->perf.requests);
+	int ret;
+
+	if (WARN_ON(engine->perf.requests_vma))
+		return -ENODEV;
+
+	bo = i915_gem_object_create(engine->i915, buffer_size);
+	if (IS_ERR(bo)) {
+		DRM_ERROR("Failed to allocate requests buffer for engine %s\n",
+			  engine->name);
+		return PTR_ERR(bo);
+	}
+
+	/* TODO: no need to map in ggtt. */
+	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, buffer_size, 0);
+	if (IS_ERR(vma)) {
+		ret = PTR_ERR(vma);
+		goto err_unref;
+	}
+	engine->perf.requests_vma = vma;
+
+	engine->perf.requests = i915_gem_object_pin_map(bo, I915_MAP_WB);
+	if (IS_ERR(engine->perf.requests)) {
+		ret = PTR_ERR(engine->perf.requests);
+		goto err_unpin;
+	}
+
+	engine->perf.max_requests = OA_BUFFER_REPORTS;
+
+	atomic_set(&engine->perf.head, 0);
+	atomic_set(&engine->perf.tail, 0);
+	atomic_set(&engine->perf.overflow, 0);
+
+	engine->perf.started = false;
+
+	DRM_DEBUG_DRIVER("Request Buffer initialized, gtt offset = 0x%x, vaddr = %p\n",
+			 i915_ggtt_offset(engine->perf.requests_vma),
+			 engine->perf.requests);
+	return 0;
+
+err_unpin:
+	__i915_vma_unpin(vma);
+
+err_unref:
+	i915_gem_object_put(bo);
+
+	engine->perf.requests = NULL;
+	engine->perf.requests_vma = NULL;
+
+	return ret;
+}
 
 /**
  * i915_oa_stream_init - validate combined props for OA stream and init
@@ -2049,6 +2368,14 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	if (!(props->sample_flags & SAMPLE_OA_REPORT)) {
 		DRM_DEBUG("Only OA report sampling supported\n");
 		return -EINVAL;
+	}
+
+	/* Gen7 PID reports will be enabled in a later patch for
+	 * simplicity.
+	 */
+	if ((props->sample_flags & SAMPLE_PID_REPORT) && IS_GEN(dev_priv, 7, 7)) {
+		DRM_DEBUG("Process ID reports not supported on Gen7\n");
+		return -ENODEV;
 	}
 
 	if (!dev_priv->perf.oa.ops.init_oa_buffer) {
@@ -2096,6 +2423,11 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 
 	stream->sample_flags |= SAMPLE_OA_REPORT;
 	stream->sample_size += format_size;
+
+	if (props->sample_flags & SAMPLE_PID_REPORT) {
+		stream->sample_flags |= SAMPLE_PID_REPORT;
+		stream->sample_size += sizeof(s32[2]);
+	}
 
 	dev_priv->perf.oa.oa_buffer.format_size = format_size;
 	if (WARN_ON(dev_priv->perf.oa.oa_buffer.format_size == 0))
@@ -2151,11 +2483,24 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	if (ret)
 		goto err_lock;
 
+	/* So far, the OA units is tied to the RCS engine and only generates
+	 * context switch tagged reports from the RCS.
+	 */
+	if (stream->sample_flags & SAMPLE_PID_REPORT) {
+		ret = alloc_engine_requests_buffer_locked(dev_priv->engine[RCS]);
+		if (ret)
+			goto err_requests;
+	}
+
 	dev_priv->perf.oa.exclusive_stream = stream;
 
 	mutex_unlock(&dev_priv->drm.struct_mutex);
 
 	return 0;
+
+err_requests:
+	free_engine_requests_buffer_locked(dev_priv->engine[RCS]);
+	mutex_unlock(&dev_priv->drm.struct_mutex);
 
 err_lock:
 	dev_priv->perf.oa.ops.disable_metric_set(dev_priv);
@@ -2604,22 +2949,28 @@ i915_perf_open_ioctl_locked(struct drm_i915_private *dev_priv,
 		}
 	}
 
-	/*
-	 * On Haswell the OA unit supports clock gating off for a specific
-	 * context and in this mode there's no visibility of metrics for the
-	 * rest of the system, which we consider acceptable for a
-	 * non-privileged client.
-	 *
-	 * For Gen8+ the OA unit no longer supports clock gating off for a
-	 * specific context and the kernel can't securely stop the counters
-	 * from updating as system-wide / global values. Even though we can
-	 * filter reports based on the included context ID we can't block
-	 * clients from seeing the raw / global counter values via
-	 * MI_REPORT_PERF_COUNT commands and so consider it a privileged op to
-	 * enable the OA unit by default.
-	 */
-	if (IS_HASWELL(dev_priv) && specific_ctx)
-		privileged_op = false;
+	if (props->sample_flags & SAMPLE_PID_REPORT) {
+		privileged_op = true;
+	} else {
+		/*
+		 * On Haswell the OA unit supports clock gating off for a
+		 * specific context and in this mode there's no visibility of
+		 * metrics for the rest of the system, which we consider
+		 * acceptable for a non-privileged client.
+		 *
+		 * For Gen8+ the OA unit no longer supports clock gating off
+		 * for a specific context and the kernel can't securely stop
+		 * the counters from updating as system-wide / global
+		 * values. Even though we can filter reports based on the
+		 * included context ID we can't block clients from seeing the
+		 * raw / global counter values via MI_REPORT_PERF_COUNT
+		 * commands and so consider it a privileged op to enable the
+		 * OA unit by default.
+		 */
+		if (IS_HASWELL(dev_priv) && specific_ctx)
+			privileged_op = false;
+	}
+
 
 	/* Similar to perf's kernel.perf_paranoid_cpu sysctl option
 	 * we check a dev.i915.perf_stream_paranoid sysctl option

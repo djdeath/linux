@@ -2060,6 +2060,33 @@ void intel_disable_engine_stats(struct intel_engine_cs *engine)
 	spin_unlock_irqrestore(&engine->stats.lock, flags);
 }
 
+void __intel_ring_perf_record(struct intel_engine_cs *engine,
+			      u32 hw_id, s32 pid, s32 tid, u32 port, bool preempt)
+{
+	unsigned head;
+	unsigned tail;
+
+	if (!engine->perf.started || atomic_read(&engine->perf.overflow))
+		return;
+
+	/* DRM_ERROR(" ====> record hw_id=0x%x pid=%i port=%u preempt=%i\n", */
+	/* 	  hw_id, pid, port, preempt); */
+
+	head = atomic_read(&engine->perf.head);
+	tail = atomic_read(&engine->perf.tail);
+
+	engine->perf.requests[head].hw_id = hw_id;
+	engine->perf.requests[head].pid = pid;
+	engine->perf.requests[head].tid = tid;
+
+	head = (head + 1) % engine->perf.max_requests;
+
+	if (tail == head)
+		atomic_set(&engine->perf.overflow, 1);
+
+	atomic_set(&engine->perf.head, head);
+}
+
 #if IS_ENABLED(CONFIG_DRM_I915_SELFTEST)
 #include "selftests/mock_engine.c"
 #endif

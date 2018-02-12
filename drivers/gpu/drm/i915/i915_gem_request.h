@@ -168,6 +168,10 @@ struct drm_i915_gem_request {
 	s32 pid;
 	s32 tid;
 
+#define I915_REQUEST_OP_PERF_RECORD_START (1)
+#define I915_REQUEST_OP_PERF_RECORD_STOP  (2)
+	u32 submit_operation;
+
 	/** Position in the ring of the start of the request */
 	u32 head;
 

@@ -753,6 +753,8 @@ i915_gem_request_alloc(struct intel_engine_cs *engine,
 	req->pid = ctx == dev_priv->kernel_context ? 0 : -1;
 	req->tid = -1;
 
+	req->submit_operation = 0; /* NOOP */
+
 	req->global_seqno = 0;
 	req->signaling.wait.seqno = 0;
 	req->file_priv = NULL;

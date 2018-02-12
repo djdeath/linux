@@ -351,6 +351,54 @@ struct intel_engine_cs {
 	} breadcrumbs;
 
 	struct {
+		/* Buffer containing an array of struct
+		 * intel_perf_request. The submission tasklet records data
+		 * into this buffer everytime somethings is submitted to the
+		 * hardware. The i915 perf driver reads them out.
+		 *
+		 * This is used to track the process associated with a
+		 * particular hw_id in an OA report.
+		 */
+		struct i915_vma *requests_vma;
+
+		/* Pointer to the allocated vma. */
+		struct intel_perf_request {
+			u32 hw_id;
+			s32 pid;
+			s32 tid;
+		} *requests, last_request;
+
+		/* Maximum number of request in the buffer. */
+		u32 max_requests;
+
+		/* Head of the buffer (initialized by i915 perf and then
+		 * updated by the submission tasklet in
+		 * __intel_ring_perf_record).
+		 */
+		atomic_t head;
+
+		/* Tail of the buffer (updated by read from i915 perf). */
+		atomic_t tail;
+
+		/* Whether the buffer has overflown (set on submission by
+		 * __intel_ring_perf_record)
+		 */
+		atomic_t overflow;
+
+		/* Whether the recording of requests to the buffer is enabled
+		 * (set from the submission tasklet).
+		 */
+		bool started;
+
+		/* Whether i915/perf has synced its OA reports with the
+		 * requests recorded by the submission tasklet.
+		 */
+		bool synced;
+
+		atomic_t debug;
+	} perf;
+
+	struct {
 		/**
 		 * @enable: Bitmask of enable sample events on this engine.
 		 *
@@ -1071,5 +1119,40 @@ int intel_enable_engine_stats(struct intel_engine_cs *engine);
 void intel_disable_engine_stats(struct intel_engine_cs *engine);
 
 ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine);
+
+void __intel_ring_perf_record(struct intel_engine_cs *engine,
+			      u32 hw_id, s32 pid, s32 tid, u32 port, bool preempt);
+
+static inline void __intel_ring_perf_record_preempt(struct intel_engine_cs *engine,
+						    u32 hw_id, u32 port)
+{
+	__intel_ring_perf_record(engine, hw_id,
+				 0 /* preemption is initiated by the kernel */,
+				 -1, port, true);
+}
+
+static inline void __intel_ring_perf_record_request(struct intel_engine_cs *engine,
+						    struct drm_i915_gem_request *req,
+						    u32 port)
+{
+	switch (req->submit_operation) {
+	case 0:
+		/* NOOP */
+		break;
+	case I915_REQUEST_OP_PERF_RECORD_START:
+		engine->perf.started = true;
+		break;
+	case I915_REQUEST_OP_PERF_RECORD_STOP:
+		engine->perf.started = false;
+		break;
+	default:
+		DRM_ERROR("Invalid submit operation: %u\n", req->submit_operation);
+		GEM_BUG_ON(req->submit_operation);
+		break;
+	}
+
+	__intel_ring_perf_record(engine, req->hw_id, req->pid, req->tid, port, false);
+}
+
 
 #endif /* _INTEL_RINGBUFFER_H_ */

@@ -382,11 +382,16 @@ static inline void elsp_write(u64 desc, u32 __iomem *elsp)
 static void execlists_submit_ports(struct intel_engine_cs *engine)
 {
 	struct execlist_port *port = engine->execlists.port;
-	unsigned int n;
+	unsigned int count, n, n_ports = execlists_num_ports(&engine->execlists);
+	struct drm_i915_gem_request *rq;
 
-	for (n = execlists_num_ports(&engine->execlists); n--; ) {
-		struct drm_i915_gem_request *rq;
-		unsigned int count;
+	for (n = 0; n < n_ports; n++) {
+		rq = port_unpack(&port[n], &count);
+		if (rq)
+			__intel_ring_perf_record_request(engine, rq, n);
+	}
+
+	for (n = n_ports; n--; ) {
 		u64 desc;
 
 		rq = port_unpack(&port[n], &count);
@@ -443,8 +448,8 @@ static void port_assign(struct execlist_port *port,
 
 static void inject_preempt_context(struct intel_engine_cs *engine)
 {
-	struct intel_context *ce =
-		&engine->i915->preempt_context->engine[engine->id];
+	struct i915_gem_context *ctx = engine->i915->preempt_context;
+	struct intel_context *ce = &ctx->engine[engine->id];
 	unsigned int n;
 
 	GEM_BUG_ON(engine->execlists.preempt_complete_status !=
@@ -466,6 +471,7 @@ static void inject_preempt_context(struct intel_engine_cs *engine)
 	for (n = execlists_num_ports(&engine->execlists); --n; )
 		elsp_write(0, engine->execlists.elsp);
 
+	__intel_ring_perf_record_preempt(engine, ctx->hw_id, 0);
 	elsp_write(ce->lrc_desc, engine->execlists.elsp);
 	execlists_clear_active(&engine->execlists, EXECLISTS_ACTIVE_HWACK);
 }
