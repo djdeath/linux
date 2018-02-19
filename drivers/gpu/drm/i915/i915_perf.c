@@ -893,8 +893,8 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 		DRM_DEBUG("OA buffer overflow (exponent = %d): force restart\n",
 			  dev_priv->perf.oa.period_exponent);
 
-		dev_priv->perf.oa.ops.oa_disable(dev_priv);
-		dev_priv->perf.oa.ops.oa_enable(dev_priv);
+		dev_priv->perf.oa.ops.oa_disable(dev_priv, stream);
+		dev_priv->perf.oa.ops.oa_enable(dev_priv, stream);
 
 		/*
 		 * Note: .oa_enable() is expected to re-init the oabuffer and
@@ -1117,8 +1117,8 @@ static int gen7_oa_read(struct i915_perf_stream *stream,
 		DRM_DEBUG("OA buffer overflow (exponent = %d): force restart\n",
 			  dev_priv->perf.oa.period_exponent);
 
-		dev_priv->perf.oa.ops.oa_disable(dev_priv);
-		dev_priv->perf.oa.ops.oa_enable(dev_priv);
+		dev_priv->perf.oa.ops.oa_disable(dev_priv, stream);
+		dev_priv->perf.oa.ops.oa_enable(dev_priv, stream);
 
 		oastatus1 = I915_READ(GEN7_OASTATUS1);
 	}
@@ -1895,10 +1895,10 @@ static void gen10_disable_metric_set(struct drm_i915_private *dev_priv)
 		   I915_READ(RPM_CONFIG1) & ~GEN10_GT_NOA_ENABLE);
 }
 
-static void gen7_oa_enable(struct drm_i915_private *dev_priv)
+static void gen7_oa_enable(struct drm_i915_private *dev_priv,
+			   struct i915_perf_stream *stream)
 {
-	struct i915_gem_context *ctx =
-			dev_priv->perf.oa.exclusive_stream->ctx;
+	struct i915_gem_context *ctx = stream->ctx;
 	u32 ctx_id = dev_priv->perf.oa.specific_ctx_id;
 	bool periodic = dev_priv->perf.oa.periodic;
 	u32 period_exponent = dev_priv->perf.oa.period_exponent;
@@ -1925,7 +1925,8 @@ static void gen7_oa_enable(struct drm_i915_private *dev_priv)
 		   GEN7_OACONTROL_ENABLE);
 }
 
-static void gen8_oa_enable(struct drm_i915_private *dev_priv)
+static void gen8_oa_enable(struct drm_i915_private *dev_priv,
+			   struct i915_perf_stream *stream)
 {
 	u32 report_format = dev_priv->perf.oa.oa_buffer.format;
 
@@ -1963,7 +1964,7 @@ static void i915_oa_stream_enable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 
-	dev_priv->perf.oa.ops.oa_enable(dev_priv);
+	dev_priv->perf.oa.ops.oa_enable(dev_priv, stream);
 
 	if (dev_priv->perf.oa.periodic)
 		hrtimer_start(&dev_priv->perf.oa.poll_check_timer,
@@ -1971,12 +1972,14 @@ static void i915_oa_stream_enable(struct i915_perf_stream *stream)
 			      HRTIMER_MODE_REL_PINNED);
 }
 
-static void gen7_oa_disable(struct drm_i915_private *dev_priv)
+static void gen7_oa_disable(struct drm_i915_private *dev_priv,
+			    struct i915_perf_stream *stream)
 {
 	I915_WRITE(GEN7_OACONTROL, 0);
 }
 
-static void gen8_oa_disable(struct drm_i915_private *dev_priv)
+static void gen8_oa_disable(struct drm_i915_private *dev_priv,
+			    struct i915_perf_stream *stream)
 {
 	I915_WRITE(GEN8_OACONTROL, 0);
 }
@@ -1993,7 +1996,7 @@ static void i915_oa_stream_disable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 
-	dev_priv->perf.oa.ops.oa_disable(dev_priv);
+	dev_priv->perf.oa.ops.oa_disable(dev_priv, stream);
 
 	if (dev_priv->perf.oa.periodic)
 		hrtimer_cancel(&dev_priv->perf.oa.poll_check_timer);
