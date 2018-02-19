@@ -3112,6 +3112,10 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 			if (value)
 				props->sample_flags |= SAMPLE_OA_REPORT;
 			break;
+		case DRM_I915_PERF_PROP_PROCESS_ID:
+			if (value)
+				props->sample_flags |= SAMPLE_PID_REPORT;
+			break;
 		case DRM_I915_PERF_PROP_OA_METRICS_SET:
 			if (value == 0) {
 				DRM_DEBUG("Unknown OA metric set ID\n");

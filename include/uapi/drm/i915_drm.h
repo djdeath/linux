@@ -1510,6 +1510,12 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_OA_EXPONENT,
 
+	/**
+	 * A value of 1 requests the inclusion of pid & tid as part of the
+	 * stream samples.
+	 */
+	DRM_I915_PERF_PROP_PROCESS_ID,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 
@@ -1575,6 +1581,7 @@ enum drm_i915_perf_record_type {
 	 * struct {
 	 *     struct drm_i915_perf_record_header header;
 	 *
+	 *     { s32 pid; s32 tid; } && DRM_I915_PERF_PROP_PROCESS_ID
 	 *     { u32 oa_report[]; } && DRM_I915_PERF_PROP_SAMPLE_OA
 	 * };
 	 */
