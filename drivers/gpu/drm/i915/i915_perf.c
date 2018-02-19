@@ -1488,8 +1488,6 @@ static int alloc_oa_buffer(struct drm_i915_private *dev_priv,
 		goto err_unpin;
 	}
 
-	dev_priv->perf.oa.ops.init_oa_buffer(dev_priv);
-
 	DRM_DEBUG_DRIVER("OA Buffer initialized, gtt offset = 0x%x, vaddr = %p\n",
 			 i915_ggtt_offset(dev_priv->perf.oa.oa_buffer.vma),
 			 dev_priv->perf.oa.oa_buffer.vaddr);
@@ -2065,7 +2063,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		return -EINVAL;
 	}
 
-	if (!dev_priv->perf.oa.ops.init_oa_buffer) {
+
+	if (!dev_priv->perf.oa.ops.enable_metric_set) {
 		DRM_DEBUG("OA unit not supported\n");
 		return -ENODEV;
 	}
@@ -3462,7 +3461,6 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 		dev_priv->perf.oa.ops.is_valid_mux_reg =
 			hsw_is_valid_mux_addr;
 		dev_priv->perf.oa.ops.is_valid_flex_reg = NULL;
-		dev_priv->perf.oa.ops.init_oa_buffer = gen7_init_oa_buffer;
 		dev_priv->perf.oa.ops.enable_metric_set = hsw_enable_metric_set;
 		dev_priv->perf.oa.ops.disable_metric_set = hsw_disable_metric_set;
 		dev_priv->perf.oa.ops.oa_enable = gen7_oa_enable;
@@ -3481,7 +3479,6 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 		 */
 		dev_priv->perf.oa.oa_formats = gen8_plus_oa_formats;
 
-		dev_priv->perf.oa.ops.init_oa_buffer = gen8_init_oa_buffer;
 		dev_priv->perf.oa.ops.oa_enable = gen8_oa_enable;
 		dev_priv->perf.oa.ops.oa_disable = gen8_oa_disable;
 		dev_priv->perf.oa.ops.read = gen8_oa_read;
