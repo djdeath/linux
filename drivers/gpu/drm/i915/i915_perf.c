@@ -1435,12 +1435,14 @@ static int alloc_oa_buffer(struct drm_i915_private *dev_priv)
 	struct i915_vma *vma;
 	int ret;
 
-	if (WARN_ON(dev_priv->perf.oa.oa_buffer.vma))
-		return -ENODEV;
-
 	ret = i915_mutex_lock_interruptible(&dev_priv->drm);
 	if (ret)
 		return ret;
+
+	if (dev_priv->perf.oa.oa_buffer.vma) {
+		ret = -EBUSY;
+		goto unlock;
+	}
 
 	BUILD_BUG_ON_NOT_POWER_OF_2(OA_BUFFER_SIZE);
 	BUILD_BUG_ON(OA_BUFFER_SIZE < SZ_128K || OA_BUFFER_SIZE > SZ_16M);
