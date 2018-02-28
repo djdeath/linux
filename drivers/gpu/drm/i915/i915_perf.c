@@ -1757,21 +1757,16 @@ static int gen8_switch_to_updated_kernel_context(struct drm_i915_private *dev_pr
  */
 static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 				       const struct i915_oa_config *oa_config,
-				       bool interruptible)
+				       bool need_lock)
 {
 	struct i915_gem_context *ctx;
 	int ret;
 	unsigned int wait_flags = I915_WAIT_LOCKED;
 
-	if (interruptible) {
-		ret = i915_mutex_lock_interruptible(&dev_priv->drm);
-		if (ret)
-			return ret;
-
-		wait_flags |= I915_WAIT_INTERRUPTIBLE;
-	} else {
+	if (need_lock)
 		mutex_lock(&dev_priv->drm.struct_mutex);
-	}
+
+	lockdep_assert_held(&dev_priv->drm.struct_mutex);
 
 	/* Switch away from any user context. */
 	ret = gen8_switch_to_updated_kernel_context(dev_priv, oa_config);
@@ -1819,7 +1814,8 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 	}
 
  out:
-	mutex_unlock(&dev_priv->drm.struct_mutex);
+	if (need_lock)
+		mutex_unlock(&dev_priv->drm.struct_mutex);
 
 	return ret;
 }
@@ -1863,7 +1859,7 @@ static int gen8_enable_metric_set(struct drm_i915_private *dev_priv,
 	 * to make sure all slices/subslices are ON before writing to NOA
 	 * registers.
 	 */
-	ret = gen8_configure_all_contexts(dev_priv, oa_config, true);
+	ret = gen8_configure_all_contexts(dev_priv, oa_config, false);
 	if (ret)
 		return ret;
 
@@ -1878,7 +1874,7 @@ static int gen8_enable_metric_set(struct drm_i915_private *dev_priv,
 static void gen8_disable_metric_set(struct drm_i915_private *dev_priv)
 {
 	/* Reset all contexts' slices/subslices configurations. */
-	gen8_configure_all_contexts(dev_priv, NULL, false);
+	gen8_configure_all_contexts(dev_priv, NULL, true);
 
 	I915_WRITE(GDT_CHICKEN_BITS, (I915_READ(GDT_CHICKEN_BITS) &
 				      ~GT_NOA_ENABLE));
@@ -1888,7 +1884,7 @@ static void gen8_disable_metric_set(struct drm_i915_private *dev_priv)
 static void gen10_disable_metric_set(struct drm_i915_private *dev_priv)
 {
 	/* Reset all contexts' slices/subslices configurations. */
-	gen8_configure_all_contexts(dev_priv, NULL, false);
+	gen8_configure_all_contexts(dev_priv, NULL, true);
 
 	/* Make sure we disable noa to save power. */
 	I915_WRITE(RPM_CONFIG1,
@@ -2138,13 +2134,6 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	if (ret)
 		goto err_oa_buf_alloc;
 
-	ret = dev_priv->perf.oa.ops.enable_metric_set(dev_priv,
-						      stream->oa_config);
-	if (ret)
-		goto err_enable;
-
-	stream->ops = &i915_oa_stream_ops;
-
 	/* Lock device for exclusive_stream access late because
 	 * enable_metric_set() might lock as well on gen8+.
 	 */
@@ -2152,16 +2141,24 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	if (ret)
 		goto err_lock;
 
+	ret = dev_priv->perf.oa.ops.enable_metric_set(dev_priv,
+						      stream->oa_config);
+	if (ret)
+		goto err_enable;
+
+	stream->ops = &i915_oa_stream_ops;
+
 	dev_priv->perf.oa.exclusive_stream = stream;
 
 	mutex_unlock(&dev_priv->drm.struct_mutex);
 
 	return 0;
 
-err_lock:
+err_enable:
+	mutex_unlock(&dev_priv->drm.struct_mutex);
 	dev_priv->perf.oa.ops.disable_metric_set(dev_priv);
 
-err_enable:
+err_lock:
 	free_oa_buffer(dev_priv);
 
 err_oa_buf_alloc:
