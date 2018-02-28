@@ -1593,11 +1593,25 @@ static void gen8_update_reg_state_unlocked(struct i915_gem_context *ctx,
 	int i;
 
 	reg_state[ctx_oactxctrl] = i915_mmio_reg_offset(GEN8_OACTXCONTROL);
-	reg_state[ctx_oactxctrl+1] = (dev_priv->perf.oa.period_exponent <<
-				      GEN8_OA_TIMER_PERIOD_SHIFT) |
-				     (dev_priv->perf.oa.periodic ?
-				      GEN8_OA_TIMER_ENABLE : 0) |
-				     GEN8_OA_COUNTER_RESUME;
+	if (oa_config) {
+		reg_state[ctx_oactxctrl+1] =
+			(dev_priv->perf.oa.period_exponent << GEN8_OA_TIMER_PERIOD_SHIFT) |
+			(dev_priv->perf.oa.periodic ? GEN8_OA_TIMER_ENABLE : 0) |
+			GEN8_OA_COUNTER_RESUME;
+	} else {
+		u32 old_period_exponent =
+			(reg_state[ctx_oactxctrl+1] >> GEN8_OA_TIMER_PERIOD_SHIFT) &
+			GEN8_OA_TIMER_PERIOD_MASK;
+
+		/*
+		 * When disabling a metric set that all context have the
+		 * period value stored in their context image. If not, this
+		 * means we botched the context images programming and that
+		 * the OA unit might produce reports in an erratic manner.
+		 */
+		BUG_ON(old_period_exponent != dev_priv->perf.oa.period_exponent);
+		reg_state[ctx_oactxctrl+1] = 0;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(flex_mmio); i++) {
 		u32 state_offset = ctx_flexeu0 + i * 2;
@@ -2102,8 +2116,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		dev_priv->perf.oa.oa_formats[props->oa_format].format;
 
 	dev_priv->perf.oa.periodic = props->oa_periodic;
-	if (dev_priv->perf.oa.periodic)
-		dev_priv->perf.oa.period_exponent = props->oa_period_exponent;
+	dev_priv->perf.oa.period_exponent =
+		props->oa_periodic ? props->oa_period_exponent : 0;
 
 	if (stream->ctx) {
 		ret = oa_get_render_ctx_id(stream);
