@@ -309,6 +309,8 @@ static void gen9_sseu_info_init(struct drm_i915_private *dev_priv)
 
 	fuse2 = I915_READ(GEN8_FUSE2);
 	sseu->slice_mask = (fuse2 & GEN8_F2_S_ENA_MASK) >> GEN8_F2_S_ENA_SHIFT;
+	if (i915_modparams.slice_mask)
+		sseu->slice_mask = i915_modparams.slice_mask;
 
 	/* BXT has a single slice and at most 3 subslices. */
 	sseu->max_slices = IS_GEN9_LP(dev_priv) ? 1 : 3;
@@ -380,8 +382,8 @@ static void gen9_sseu_info_init(struct drm_i915_private *dev_priv)
 	 * supports EU power gating on devices with more than one EU
 	 * pair per subslice.
 	*/
-	sseu->has_slice_pg =
-		!IS_GEN9_LP(dev_priv) && hweight8(sseu->slice_mask) > 1;
+	sseu->has_slice_pg = 1;
+	/* !IS_GEN9_LP(dev_priv) && hweight8(sseu->slice_mask) > 1; */
 	sseu->has_subslice_pg =
 		IS_GEN9_LP(dev_priv) && sseu_subslice_total(sseu) > 1;
 	sseu->has_eu_pg = sseu->eu_per_subslice > 2;
