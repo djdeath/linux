@@ -421,6 +421,14 @@ static u32 gen7_oa_hw_tail_read(struct drm_i915_private *dev_priv)
 	return oastatus1 & GEN7_OASTATUS1_TAIL_MASK;
 }
 
+static bool i915_perf_stream_produces_reports(struct i915_perf_stream *stream)
+{
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	return (stream->sample_flags & SAMPLE_OA_REPORT) != 0 &&
+		dev_priv->perf.oa.periodic;
+}
+
 /**
  * oa_buffer_check_unlocked - check for data and update tail ptr state
  * @dev_priv: i915 device instance
@@ -452,6 +460,8 @@ static bool oa_buffer_check_unlocked(struct drm_i915_private *dev_priv)
 	unsigned int aged_idx;
 	u32 head, hw_tail, aged_tail, aging_tail;
 	u64 now;
+
+	GEM_BUG_ON(!i915_perf_stream_produces_reports(dev_priv->perf.oa.exclusive_stream));
 
 	/* We have to consider the (unlikely) possibility that read() errors
 	 * could result in an OA buffer reset which might reset the head,
@@ -1153,8 +1163,7 @@ static int i915_oa_wait_unlocked(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 
-	/* We would wait indefinitely if periodic sampling is not enabled */
-	if (!dev_priv->perf.oa.periodic)
+	if (!i915_perf_stream_produces_reports(stream))
 		return -EIO;
 
 	return wait_event_interruptible(dev_priv->perf.oa.poll_wq,
@@ -1821,6 +1830,7 @@ static int gen8_enable_metric_set(struct drm_i915_private *dev_priv,
 				  const struct i915_perf_stream *stream)
 {
 	struct i915_oa_config *oa_config = stream->oa_config;
+	u32 oa_debug_value = 0;
 	int ret;
 
 	/*
@@ -1847,10 +1857,22 @@ static int gen8_enable_metric_set(struct drm_i915_private *dev_priv,
 	 * RPT_ID field.
 	 */
 	if (IS_GEN9(dev_priv) || IS_GEN10(dev_priv)) {
-		I915_WRITE(GEN8_OA_DEBUG,
-			   _MASKED_BIT_ENABLE(GEN9_OA_DEBUG_DISABLE_CLK_RATIO_REPORTS |
-					      GEN9_OA_DEBUG_INCLUDE_CLK_RATIO));
+		oa_debug_value |=
+			_MASKED_BIT_ENABLE(GEN9_OA_DEBUG_DISABLE_CLK_RATIO_REPORTS |
+					   GEN9_OA_DEBUG_INCLUDE_CLK_RATIO);
 	}
+
+	/*
+	 * If the user didn't require OA reports, instruct the hardware not to
+	 * emit ctx switch reports (mind your head, we might be disabling the
+	 * disable).
+	 */
+	oa_debug_value |=
+		(stream->sample_flags & SAMPLE_OA_REPORT) ?
+		_MASKED_BIT_DISABLE(GEN9_OA_DEBUG_DISABLE_CTX_SWITCH_REPORTS) :
+		_MASKED_BIT_ENABLE(GEN9_OA_DEBUG_DISABLE_CTX_SWITCH_REPORTS);
+
+	I915_WRITE(GEN8_OA_DEBUG, oa_debug_value);
 
 	/*
 	 * Update all contexts prior writing the mux configurations as we need
@@ -1960,7 +1982,7 @@ static void i915_oa_stream_enable(struct i915_perf_stream *stream)
 
 	dev_priv->perf.oa.ops.oa_enable(dev_priv, stream);
 
-	if (dev_priv->perf.oa.periodic)
+	if (i915_perf_stream_produces_reports(stream))
 		hrtimer_start(&dev_priv->perf.oa.poll_check_timer,
 			      ns_to_ktime(POLL_PERIOD),
 			      HRTIMER_MODE_REL_PINNED);
@@ -1990,7 +2012,7 @@ static void i915_oa_stream_disable(struct i915_perf_stream *stream)
 
 	dev_priv->perf.oa.ops.oa_disable(dev_priv);
 
-	if (dev_priv->perf.oa.periodic)
+	if (i915_perf_stream_produces_reports(stream))
 		hrtimer_cancel(&dev_priv->perf.oa.poll_check_timer);
 }
 
@@ -2038,11 +2060,6 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		return -EINVAL;
 	}
 
-	if (!(props->sample_flags & SAMPLE_OA_REPORT)) {
-		DRM_DEBUG("Only OA report sampling supported\n");
-		return -EINVAL;
-	}
-
 	if (!dev_priv->perf.oa.ops.init_oa_buffer) {
 		DRM_DEBUG("OA unit not supported\n");
 		return -ENODEV;
@@ -2086,8 +2103,10 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 
 	format_size = dev_priv->perf.oa.oa_formats[props->oa_format].size;
 
-	stream->sample_flags |= SAMPLE_OA_REPORT;
-	stream->sample_size += format_size;
+	if (props->sample_flags & SAMPLE_OA_REPORT) {
+		stream->sample_flags |= SAMPLE_OA_REPORT;
+		stream->sample_size += format_size;
+	}
 
 	dev_priv->perf.oa.oa_buffer.format_size = format_size;
 	if (WARN_ON(dev_priv->perf.oa.oa_buffer.format_size == 0))
@@ -2255,6 +2274,12 @@ static ssize_t i915_perf_read(struct file *file,
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 	ssize_t ret;
 
+	/* If the user opened the stream only to snapshot counters through
+	 * MI_RECORD_PERF_COUNT, there is nothing to read from the OA buffer.
+	 */
+	if (!i915_perf_stream_produces_reports(stream))
+		return -EIO;
+
 	/* To ensure it's handled consistently we simply treat all reads of a
 	 * disabled stream as an error. In particular it might otherwise lead
 	 * to a deadlock for blocking file descriptors...
@@ -2342,6 +2367,9 @@ static __poll_t i915_perf_poll_locked(struct drm_i915_private *dev_priv,
 					  poll_table *wait)
 {
 	__poll_t events = 0;
+
+	if (!i915_perf_stream_produces_reports(stream))
+		return events;
 
 	stream->ops->poll_wait(stream, file, wait);
 
