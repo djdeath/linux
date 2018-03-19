@@ -1372,7 +1372,8 @@ static void gen7_init_oa_buffer(struct drm_i915_private *dev_priv)
 	 * the assumption that new reports are being written to zeroed
 	 * memory...
 	 */
-	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0, OA_BUFFER_SIZE);
+	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0,
+	       dev_priv->perf.oa.oa_buffer.vma->size);
 
 	/* Maybe make ->pollin per-stream state if we support multiple
 	 * concurrent streams in the future.
@@ -1430,7 +1431,8 @@ static void gen8_init_oa_buffer(struct drm_i915_private *dev_priv)
 	 * the assumption that new reports are being written to zeroed
 	 * memory...
 	 */
-	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0, OA_BUFFER_SIZE);
+	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0,
+	       dev_priv->perf.oa.oa_buffer.vma->size);
 
 	/*
 	 * Maybe make ->pollin per-stream state if we support multiple
@@ -1439,10 +1441,13 @@ static void gen8_init_oa_buffer(struct drm_i915_private *dev_priv)
 	dev_priv->perf.oa.pollin = false;
 }
 
-static int alloc_oa_buffer(struct drm_i915_private *dev_priv)
+static int alloc_oa_buffer(struct drm_i915_private *dev_priv,
+			   struct i915_perf_stream *stream)
 {
 	struct drm_i915_gem_object *bo;
 	struct i915_vma *vma;
+	u32 buffer_size = (stream->sample_flags & SAMPLE_OA_REPORT) == 0 ?
+		SZ_128K : OA_BUFFER_SIZE;
 	int ret;
 
 	ret = i915_mutex_lock_interruptible(&dev_priv->drm);
@@ -1457,7 +1462,7 @@ static int alloc_oa_buffer(struct drm_i915_private *dev_priv)
 	BUILD_BUG_ON_NOT_POWER_OF_2(OA_BUFFER_SIZE);
 	BUILD_BUG_ON(OA_BUFFER_SIZE < SZ_128K || OA_BUFFER_SIZE > SZ_16M);
 
-	bo = i915_gem_object_create(dev_priv, OA_BUFFER_SIZE);
+	bo = i915_gem_object_create(dev_priv, buffer_size);
 	if (IS_ERR(bo)) {
 		DRM_ERROR("Failed to allocate OA buffer\n");
 		ret = PTR_ERR(bo);
@@ -1469,7 +1474,7 @@ static int alloc_oa_buffer(struct drm_i915_private *dev_priv)
 		goto err_unref;
 
 	/* PreHSW required 512K alignment, HSW requires 16M */
-	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, SZ_16M, 0);
+	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, buffer_size, 0);
 	if (IS_ERR(vma)) {
 		ret = PTR_ERR(vma);
 		goto err_unref;
@@ -2148,7 +2153,7 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	intel_runtime_pm_get(dev_priv);
 	intel_uncore_forcewake_get(dev_priv, FORCEWAKE_ALL);
 
-	ret = alloc_oa_buffer(dev_priv);
+	ret = alloc_oa_buffer(dev_priv, stream);
 	if (ret)
 		goto err_oa_buf_alloc;
 
