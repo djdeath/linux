@@ -1503,7 +1503,7 @@ struct i915_oa_ops {
 	 * disabling EU clock gating as required.
 	 */
 	int (*enable_metric_set)(struct drm_i915_private *dev_priv,
-				 const struct i915_oa_config *oa_config);
+				 const struct i915_perf_stream *stream);
 
 	/**
 	 * @disable_metric_set: Remove system constraints associated with using

@@ -1507,8 +1507,10 @@ static void config_oa_regs(struct drm_i915_private *dev_priv,
 }
 
 static int hsw_enable_metric_set(struct drm_i915_private *dev_priv,
-				 const struct i915_oa_config *oa_config)
+				 const struct i915_perf_stream *stream)
 {
+	const struct i915_oa_config *oa_config = stream->oa_config;
+
 	/* PRM:
 	 *
 	 * OA unit is using “crclk” for its functionality. When trunk
@@ -1813,8 +1815,9 @@ static int gen8_configure_all_contexts(struct drm_i915_private *dev_priv,
 }
 
 static int gen8_enable_metric_set(struct drm_i915_private *dev_priv,
-				  const struct i915_oa_config *oa_config)
+				  const struct i915_perf_stream *stream)
 {
+	struct i915_oa_config *oa_config = stream->oa_config;
 	int ret;
 
 	/*
@@ -2130,8 +2133,7 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	if (ret)
 		goto err_lock;
 
-	ret = dev_priv->perf.oa.ops.enable_metric_set(dev_priv,
-						      stream->oa_config);
+	ret = dev_priv->perf.oa.ops.enable_metric_set(dev_priv, stream);
 	if (ret)
 		goto err_enable;
 
