@@ -1514,7 +1514,8 @@ struct i915_oa_ops {
 	/**
 	 * @oa_enable: Enable periodic sampling
 	 */
-	void (*oa_enable)(struct drm_i915_private *dev_priv);
+	void (*oa_enable)(struct drm_i915_private *dev_priv,
+			  const struct i915_perf_stream *stream);
 
 	/**
 	 * @oa_disable: Disable periodic sampling
