@@ -2530,7 +2530,12 @@ enum i915_power_well_id {
 					be delivered when out of C3. */
 #define   INSTPM_FORCE_ORDERING				(1<<7) /* GEN6+ */
 #define   INSTPM_TLB_INVALIDATE	(1<<9)
+#define   INSTPM_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE   (1 << 6) /* GEN6+ */
 #define   INSTPM_SYNC_FLUSH	(1<<5)
+#define   INSTPM_MEDIA_INSTRUCTION_DISABLE                (1 << 3) /* GEN6+ */
+#define   INSTPM_3D_RENDERING_INSTRUCTION_DISABLE         (1 << 2) /* GEN6+ */
+#define   INSTPM_3D_STATE_INSTRUCTION_DISABLE             (1 << 1) /* GEN6+ */
+#define   INSTPM_TEXTURE_PALETTE_LOAD_INSTRUCTION_DISABLE (1 << 0) /* GEN6+ */
 #define ACTHD	        _MMIO(0x20c8)
 #define MEM_MODE	_MMIO(0x20cc)
 #define   MEM_DISPLAY_B_TRICKLE_FEED_DISABLE (1<<3) /* 830 only */

@@ -534,6 +534,16 @@ struct drm_i915_reg_descriptor {
 	{ .addr = _reg ## _UDW(idx) }
 
 static const struct drm_i915_reg_descriptor gen7_render_regs[] = {
+	REG32(INSTPM,
+	      .mask = ~((INSTPM_TEXTURE_PALETTE_LOAD_INSTRUCTION_DISABLE |
+			 INSTPM_3D_STATE_INSTRUCTION_DISABLE |
+			 INSTPM_3D_RENDERING_INSTRUCTION_DISABLE |
+			 INSTPM_MEDIA_INSTRUCTION_DISABLE) << 16 |
+			(INSTPM_TEXTURE_PALETTE_LOAD_INSTRUCTION_DISABLE |
+			 INSTPM_3D_STATE_INSTRUCTION_DISABLE |
+			 INSTPM_3D_RENDERING_INSTRUCTION_DISABLE |
+			 INSTPM_MEDIA_INSTRUCTION_DISABLE)),
+	      .value = 0),
 	REG64(GPGPU_THREADS_DISPATCHED),
 	REG64(HS_INVOCATION_COUNT),
 	REG64(DS_INVOCATION_COUNT),
@@ -1382,6 +1392,7 @@ int i915_cmd_parser_get_version(struct drm_i915_private *dev_priv)
 	 *    the parser enabled.
 	 * 9. Don't whitelist or handle oacontrol specially, as ownership
 	 *    for oacontrol state is moving to i915-perf.
+	 * 10. Whitelist bits of INSTPM on Ivybridge & Haswell.
 	 */
-	return 9;
+	return 10;
 }
