@@ -483,6 +483,44 @@ static ssize_t gt_rp_mhz_show(struct device *kdev, struct device_attribute *attr
 	return snprintf(buf, PAGE_SIZE, "%d\n", val);
 }
 
+static ssize_t allow_dynamic_sseu_show(struct device *kdev,
+				       struct device_attribute *attr,
+				       char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+	bool value = i915_gem_contexts_get_dynamic_sseu(i915);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", value);
+}
+
+static ssize_t allow_dynamic_sseu_store(struct device *kdev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+	ssize_t ret;
+	u32 val;
+
+	ret = kstrtou32(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val != 0 && val != 1)
+		return -EINVAL;
+
+	ret = mutex_lock_interruptible(&i915->drm.struct_mutex);
+	if (ret)
+		return ret;
+
+	ret = i915_gem_contexts_set_dynamic_sseu(i915, val != 0);
+
+	mutex_unlock(&i915->drm.struct_mutex);
+
+	return ret ?: count;
+}
+
+static DEVICE_ATTR_RW(allow_dynamic_sseu);
+
 static const struct attribute *gen6_attrs[] = {
 	&dev_attr_gt_act_freq_mhz.attr,
 	&dev_attr_gt_cur_freq_mhz.attr,
@@ -492,6 +530,7 @@ static const struct attribute *gen6_attrs[] = {
 	&dev_attr_gt_RP0_freq_mhz.attr,
 	&dev_attr_gt_RP1_freq_mhz.attr,
 	&dev_attr_gt_RPn_freq_mhz.attr,
+	&dev_attr_allow_dynamic_sseu.attr,
 	NULL,
 };
 
@@ -505,6 +544,7 @@ static const struct attribute *vlv_attrs[] = {
 	&dev_attr_gt_RP1_freq_mhz.attr,
 	&dev_attr_gt_RPn_freq_mhz.attr,
 	&dev_attr_vlv_rpe_freq_mhz.attr,
+	&dev_attr_allow_dynamic_sseu.attr,
 	NULL,
 };
 

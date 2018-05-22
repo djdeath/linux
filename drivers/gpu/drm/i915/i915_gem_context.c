@@ -1127,6 +1127,44 @@ out:
 	return ret;
 }
 
+int i915_gem_contexts_set_dynamic_sseu(struct drm_i915_private *i915,
+				       bool allowed)
+{
+	struct intel_engine_cs *engine = i915->engine[RCS];
+	struct i915_gem_context *ctx;
+	int ret = 0;
+
+	lockdep_assert_held(&i915->drm.struct_mutex);
+
+	if (!engine->emit_rpcs_config)
+		return -ENODEV;
+
+	if (allowed == i915->contexts.dynamic_sseu)
+		return 0;
+
+	i915->contexts.dynamic_sseu = allowed;
+
+	list_for_each_entry(ctx, &i915->contexts.list, link) {
+		struct intel_context *ce = to_intel_context(ctx, engine);
+
+		ret = i915_gem_context_reconfigure_sseu(ctx, engine, ce->sseu);
+		if (ret)
+			break;
+	}
+
+	return ret;
+}
+
+bool i915_gem_contexts_get_dynamic_sseu(struct drm_i915_private *i915)
+{
+	struct intel_engine_cs *engine = i915->engine[RCS];
+
+	if (!engine->emit_rpcs_config)
+		return false;
+
+	return i915->contexts.dynamic_sseu;
+}
+
 #if IS_ENABLED(CONFIG_DRM_I915_SELFTEST)
 #include "selftests/mock_context.c"
 #include "selftests/i915_gem_context.c"

@@ -1843,6 +1843,8 @@ struct drm_i915_private {
 #define MAX_CONTEXT_HW_ID (1<<21) /* exclusive */
 #define MAX_GUC_CONTEXT_HW_ID (1 << 20) /* exclusive */
 #define GEN11_MAX_CONTEXT_HW_ID (1<<11) /* exclusive */
+
+		bool dynamic_sseu;
 	} contexts;
 
 	u32 fdi_rx_config;
@@ -3263,6 +3265,10 @@ i915_gem_context_lookup(struct drm_i915_file_private *file_priv, u32 id)
 	return ctx;
 }
 
+int i915_gem_contexts_set_dynamic_sseu(struct drm_i915_private *i915,
+				       bool allowed);
+bool i915_gem_contexts_get_dynamic_sseu(struct drm_i915_private *i915);
+
 int i915_perf_open_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file);
 int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
@@ -3863,11 +3869,13 @@ intel_engine_prepare_sseu(struct intel_engine_cs *engine,
 	struct drm_i915_private *i915 = engine->i915;
 
 	/*
-	 * If i915/perf is active, we want a stable powergating configuration
-	 * on the system. The most natural configuration to take in that case
-	 * is the default (i.e maximum the hardware can do).
+	 * If i915/perf is active or dynamic sseu configuration is not allowed
+	 * (through sysfs), we want a stable powergating configuration on the
+	 * system. The most natural configuration to take in that case is the
+	 * default (i.e maximum the hardware can do).
 	 */
-	return i915->perf.oa.exclusive_stream ?
+	return (i915->perf.oa.exclusive_stream ||
+		!i915->contexts.dynamic_sseu) ?
 		intel_device_default_sseu(i915) : sseu;
 }
 
