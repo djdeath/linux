@@ -1946,6 +1946,12 @@ struct drm_i915_private {
 		struct idr metrics_idr;
 
 		/*
+		 * Number of dynamic configurations, you need to hold
+		 * dev_priv->perf.metrics_lock to access it.
+		 */
+		u32 n_metrics;
+
+		/*
 		 * Lock associated with anything below within this structure
 		 * except exclusive_stream.
 		 */

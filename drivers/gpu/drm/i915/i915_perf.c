@@ -3357,6 +3357,8 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		goto sysfs_err;
 	}
 
+	dev_priv->perf.n_metrics++;
+
 	mutex_unlock(&dev_priv->perf.metrics_lock);
 
 	DRM_DEBUG("Added config %s id=%i\n", oa_config->uuid, oa_config->id);
@@ -3417,6 +3419,8 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 			   &oa_config->sysfs_metric);
 
 	idr_remove(&dev_priv->perf.metrics_idr, *arg);
+
+	dev_priv->perf.n_metrics--;
 
 	DRM_DEBUG("Removed config %s id=%i\n", oa_config->uuid, oa_config->id);
 
