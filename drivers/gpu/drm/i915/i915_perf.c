@@ -392,8 +392,8 @@ static u32 *write_cs_mi_lri(u32 *cs, const struct i915_oa_reg *reg_data, u32 n_r
 	return cs;
 }
 
-static int alloc_oa_config_buffer(struct drm_i915_private *i915,
-				  struct i915_oa_config *oa_config)
+static int alloc_oa_config_buffer_locked(struct drm_i915_private *i915,
+					 struct i915_oa_config *oa_config)
 {
 	struct drm_i915_gem_object *bo;
 	size_t config_length;
@@ -420,20 +420,15 @@ static int alloc_oa_config_buffer(struct drm_i915_private *i915,
 	config_length += 12; /* MI_BATCH_BUFFER_START into noa_wait loop */
 	config_length = ALIGN(config_length, I915_GTT_PAGE_SIZE);
 
-	ret = i915_mutex_lock_interruptible(&i915->drm);
-	if (ret)
-		return ret;
-
 	bo = i915_gem_object_create(i915, config_length);
 	if (IS_ERR(bo)) {
-		ret = PTR_ERR(bo);
-		goto unlock;
+		return PTR_ERR(bo);
 	}
 
 	cs = i915_gem_object_pin_map(bo, I915_MAP_WB);
 	if (IS_ERR(cs)) {
-		ret = PTR_ERR(cs);
-		goto err_unref;
+		i915_gem_object_put(bo);
+		return PTR_ERR(cs);
 	}
 
 	if (INTEL_GEN(i915) < 8) {
@@ -483,15 +478,7 @@ static int alloc_oa_config_buffer(struct drm_i915_private *i915,
 
 	oa_config->obj = bo;
 
-	goto unlock;
-
-err_unref:
-	oa_config->obj = NULL;
-	i915_gem_object_put(bo);
-
-unlock:
-	mutex_unlock(&i915->drm.struct_mutex);
-	return ret;
+	return 0;
 }
 
 int i915_perf_get_oa_config(struct drm_i915_private *i915,
@@ -523,7 +510,7 @@ int i915_perf_get_oa_config(struct drm_i915_private *i915,
 	*out_config = oa_config;
 
 	if (create_config_bo && !oa_config->obj) {
-		ret = alloc_oa_config_buffer(i915, oa_config);
+		ret = alloc_oa_config_buffer_locked(i915, oa_config);
 		if (ret)
 			goto err_buf_alloc;
 
@@ -3794,6 +3781,8 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		goto sysfs_err;
 	}
 
+	dev_priv->perf.n_metrics++;
+
 	mutex_unlock(&dev_priv->perf.metrics_lock);
 
 	DRM_DEBUG("Added config %s id=%i\n", oa_config->uuid, oa_config->id);
@@ -3854,6 +3843,8 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 			   &oa_config->sysfs_metric);
 
 	idr_remove(&dev_priv->perf.metrics_idr, *arg);
+
+	dev_priv->perf.n_metrics--;
 
 	DRM_DEBUG("Removed config %s id=%i\n", oa_config->uuid, oa_config->id);
 
