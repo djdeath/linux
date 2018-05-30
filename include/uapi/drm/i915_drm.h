@@ -1663,6 +1663,7 @@ struct drm_i915_perf_oa_config {
 struct drm_i915_query_item {
 	__u64 query_id;
 #define DRM_I915_QUERY_TOPOLOGY_INFO    1
+#define DRM_I915_QUERY_PERF_CONFIG      2
 
 	/*
 	 * When set to zero by userspace, this is filled with the size of the
@@ -1673,9 +1674,16 @@ struct drm_i915_query_item {
 	__s32 length;
 
 	/*
-	 * Unused for now. Must be cleared to zero.
+	 * When query_id == DRM_I915_QUERY_TOPOLOGY_INFO, must be 0.
+	 *
+	 * When query_id == DRM_I915_QUERY_PERF_CONFIG, must be one of the
+	 * following :
+	 *         - DRM_I915_QUERY_PERF_CONFIG_LIST
+	 *         - DRM_I915_QUERY_PERF_CONFIG_DATA
 	 */
 	__u32 flags;
+#define DRM_I915_QUERY_PERF_CONFIG_LIST 1
+#define DRM_I915_QUERY_PERF_CONFIG_DATA 2
 
 	/*
 	 * Data will be written at the location pointed by data_ptr when the
@@ -1757,6 +1765,43 @@ struct drm_i915_query_topology_info {
 	 */
 	__u16 eu_stride;
 
+	__u8 data[];
+};
+
+/*
+ * Data written by the kernel with query DRM_I915_QUERY_PERF_CONFIG.
+ */
+struct drm_i915_query_perf_config {
+	/*
+	 *
+	 * When query_item.flags == DRM_I915_QUERY_PERF_CONFIG_LIST, i915 sets
+	 * this fields to the number of configurations available.
+	 *
+	 * When query_id == DRM_I915_QUERY_PERF_CONFIG_DATA, i915 will use the
+	 * value in this field as configuration identifier to decide what data
+	 * to write into config_ptr.
+	 */
+	__u64 config;
+
+	/*
+	 * Unused for now. Must be cleared to zero.
+	 */
+	__u64 flags;
+
+	/*
+	 * When query_item.flags == DRM_I915_QUERY_PERF_CONFIG_LIST, i915 will
+	 * write an array of __u64 of configuration identifiers.
+	 *
+	 * When query_item.flags == DRM_I915_QUERY_PERF_CONFIG_DATA, i915 will
+	 * write a struct drm_i915_perf_oa_config. If the following fields of
+	 * drm_i915_perf_oa_config are set not set to 0, i915 will write into
+	 * the associated pointers the values of submitted when the
+	 * configuration was created :
+	 *
+	 *         - n_mux_regs
+	 *         - n_boolean_regs
+	 *         - n_flex_regs
+	 */
 	__u8 data[];
 };
 
