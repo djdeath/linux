@@ -1647,6 +1647,14 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_OA_BUFFER_SIZE,
 
+	/**
+	 * Specifying this property is only valid when specify a context to
+	 * filter with DRM_I915_PERF_PROP_CTX_HANDLE. Specifying this property
+	 * will hold preemption of the particular context we want to gather
+	 * performance data about.
+	 */
+	DRM_I915_PERF_PROP_HOLD_PREEMPTION,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 

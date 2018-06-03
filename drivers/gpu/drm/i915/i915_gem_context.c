@@ -343,6 +343,7 @@ intel_context_init(struct intel_context *ce,
 
 	/* Use the whole device by default */
 	ce->sseu = intel_device_default_sseu(ctx->i915);
+	ce->arb_enable = MI_ARB_ENABLE;
 
 	i915_active_request_init(&ce->active_tracker,
 				 NULL, intel_context_retire);

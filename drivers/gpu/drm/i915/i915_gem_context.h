@@ -194,6 +194,9 @@ struct i915_gem_context {
 
 		/** sseu: Control eu/slice partitioning */
 		struct intel_sseu sseu;
+
+		/* arb_enable: Control preemption */
+		u32 arb_enable;
 	} __engine[I915_NUM_ENGINES];
 
 	/** ring_size: size for allocating the per-engine ring buffer */
