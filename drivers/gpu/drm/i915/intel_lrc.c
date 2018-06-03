@@ -2101,7 +2101,7 @@ static int gen8_emit_bb_start(struct i915_request *rq,
 	 *
 	 * That satisfies both the GPGPU w/a and our heavy-handed paranoia.
 	 */
-	*cs++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
+	*cs++ = MI_ARB_ON_OFF | rq->hw_context->arb_enable;
 
 	/* FIXME(BDW): Address space and security selectors. */
 	*cs++ = MI_BATCH_BUFFER_START_GEN8 |
