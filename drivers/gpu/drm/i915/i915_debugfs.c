@@ -4310,13 +4310,119 @@ static void cherryview_sseu_device_status(struct drm_i915_private *dev_priv,
 #undef SS_MAX
 }
 
-static void gen10_sseu_device_status(struct drm_i915_private *dev_priv,
-				     struct sseu_dev_info *sseu)
+static struct drm_i915_gem_object *
+gen9_read_registers(struct drm_i915_private *i915,
+		    u32 *register_offsets,
+		    u32 n_registers)
+{
+	struct drm_i915_gem_object *bo;
+	struct i915_request *rq;
+	struct i915_vma *vma;
+	u32 *cs, bo_size = PAGE_SIZE * DIV_ROUND_UP(n_registers * 4, PAGE_SIZE);
+	int ret, r;
+
+	ret = i915_mutex_lock_interruptible(&i915->drm);
+	if (ret)
+		return ERR_PTR(ret);
+
+	bo = i915_gem_object_create(i915, bo_size);
+	if (IS_ERR(bo)) {
+		ret = PTR_ERR(bo);
+		goto unlock;
+	}
+
+	ret = i915_gem_object_set_cache_level(bo, I915_CACHE_LLC);
+	if (ret)
+		goto put_bo;
+
+
+	vma = i915_vma_instance(bo,
+				&i915->kernel_context->ppgtt->vm,
+				NULL);
+	if (IS_ERR(vma)) {
+		ret = PTR_ERR(vma);
+		goto put_bo;
+	}
+
+	ret = i915_vma_pin(vma, 0, GEN8_LR_CONTEXT_ALIGN, PIN_USER);
+	if (ret)
+		goto vma_unpin;
+
+
+	rq = i915_request_alloc(i915->engine[RCS], i915->kernel_context);
+	if (IS_ERR(rq)) {
+		ret = PTR_ERR(rq);
+		goto vma_unpin;
+	}
+
+	cs = intel_ring_begin(rq, n_registers * 4);
+	if (IS_ERR(cs)) {
+		i915_request_add(rq);
+		ret = PTR_ERR(cs);
+		goto vma_unpin;
+	}
+
+	for (r = 0; r < n_registers; r++) {
+		u64 offset = vma->node.start + r * 4;
+
+		*cs++ = MI_STORE_REGISTER_MEM_GEN8;
+		*cs++ = register_offsets[r];
+		*cs++ = lower_32_bits(offset);
+		*cs++ = upper_32_bits(offset);
+	}
+
+	intel_ring_advance(rq, cs);
+
+	i915_request_add(rq);
+
+	mutex_unlock(&i915->drm.struct_mutex);
+
+	i915_request_wait(rq, 0, MAX_SCHEDULE_TIMEOUT);
+
+	return bo;
+
+vma_unpin:
+	i915_vma_unpin(vma);
+put_bo:
+	i915_gem_object_put(bo);
+unlock:
+	mutex_unlock(&i915->drm.struct_mutex);
+	return bo;
+}
+
+
+static int gen10_sseu_device_status(struct drm_i915_private *dev_priv,
+				    struct sseu_dev_info *sseu)
 {
 #define SS_MAX 6
 	const struct intel_device_info *info = INTEL_INFO(dev_priv);
-	u32 s_reg[SS_MAX], eu_reg[2 * SS_MAX], eu_mask[2];
+	struct drm_i915_gem_object *bo;
+	struct {
+		u32 s_reg[SS_MAX];
+		u32 eu_reg[2 * SS_MAX];
+	} reg_offsets, *reg_data;
+	u32 eu_mask[2];
 	int s, ss;
+
+	for (s = 0; s < info->sseu.max_slices; s++) {
+		reg_offsets.s_reg[s] =
+			i915_mmio_reg_offset(GEN10_SLICE_PGCTL_ACK(s));
+		reg_offsets.eu_reg[2 * s] =
+			i915_mmio_reg_offset(GEN10_SS01_EU_PGCTL_ACK(s));
+		reg_offsets.eu_reg[2 * s] =
+			i915_mmio_reg_offset(GEN10_SS23_EU_PGCTL_ACK(s));
+	}
+
+	bo = gen9_read_registers(dev_priv, reg_offsets.s_reg,
+				 sizeof(reg_offsets) / sizeof(u32));
+	if (IS_ERR(bo))
+		return PTR_ERR(bo);
+
+	reg_data = i915_gem_object_pin_map(bo, I915_MAP_WB);
+	if (IS_ERR(reg_data)) {
+		i915_gem_object_put(bo);
+		return PTR_ERR(reg_data);
+	}
 
 	for (s = 0; s < info->sseu.max_slices; s++) {
 		/*
@@ -4325,10 +4431,7 @@ static void gen10_sseu_device_status(struct drm_i915_private *dev_priv,
 		 * although this seems wrong because it would leave many
 		 * subslices without ACK.
 		 */
-		s_reg[s] = I915_READ(GEN10_SLICE_PGCTL_ACK(s)) &
-			GEN10_PGCTL_VALID_SS_MASK(s);
-		eu_reg[2 * s] = I915_READ(GEN10_SS01_EU_PGCTL_ACK(s));
-		eu_reg[2 * s + 1] = I915_READ(GEN10_SS23_EU_PGCTL_ACK(s));
+		reg_data->s_reg[s] &= GEN10_PGCTL_VALID_SS_MASK(s);
 	}
 
 	eu_mask[0] = GEN9_PGCTL_SSA_EU08_ACK |
@@ -4341,7 +4444,7 @@ static void gen10_sseu_device_status(struct drm_i915_private *dev_priv,
 		     GEN9_PGCTL_SSB_EU311_ACK;
 
 	for (s = 0; s < info->sseu.max_slices; s++) {
-		if ((s_reg[s] & GEN9_PGCTL_SLICE_ACK) == 0)
+		if ((reg_data->s_reg[s] & GEN9_PGCTL_SLICE_ACK) == 0)
 			/* skip disabled slice */
 			continue;
 
@@ -4351,11 +4454,11 @@ static void gen10_sseu_device_status(struct drm_i915_private *dev_priv,
 		for (ss = 0; ss < info->sseu.max_subslices; ss++) {
 			unsigned int eu_cnt;
 
-			if (!(s_reg[s] & (GEN9_PGCTL_SS_ACK(ss))))
+			if (!(reg_data->s_reg[s] & (GEN9_PGCTL_SS_ACK(ss))))
 				/* skip disabled subslice */
 				continue;
 
-			eu_cnt = 2 * hweight32(eu_reg[2 * s + ss / 2] &
+			eu_cnt = 2 * hweight32(reg_data->eu_reg[2 * s + ss / 2] &
 					       eu_mask[ss % 2]);
 			sseu->eu_total += eu_cnt;
 			sseu->eu_per_subslice = max_t(unsigned int,
@@ -4364,20 +4467,44 @@ static void gen10_sseu_device_status(struct drm_i915_private *dev_priv,
 		}
 	}
 #undef SS_MAX
+
+	i915_gem_object_unpin_map(bo);
+	i915_gem_object_put(bo);
+
+	return 0;
 }
 
-static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
-				    struct sseu_dev_info *sseu)
+static int gen9_sseu_device_status(struct drm_i915_private *dev_priv,
+				   struct sseu_dev_info *sseu)
 {
 #define SS_MAX 3
 	const struct intel_device_info *info = INTEL_INFO(dev_priv);
-	u32 s_reg[SS_MAX], eu_reg[2 * SS_MAX], eu_mask[2];
+	struct drm_i915_gem_object *bo;
+	struct {
+		u32 s_reg[SS_MAX];
+		u32 eu_reg[2 * SS_MAX];
+	} reg_offsets, *reg_data;
+	u32 eu_mask[2];
 	int s, ss;
 
 	for (s = 0; s < info->sseu.max_slices; s++) {
-		s_reg[s] = I915_READ(GEN9_SLICE_PGCTL_ACK(s));
-		eu_reg[2*s] = I915_READ(GEN9_SS01_EU_PGCTL_ACK(s));
-		eu_reg[2*s + 1] = I915_READ(GEN9_SS23_EU_PGCTL_ACK(s));
+		reg_offsets.s_reg[s] =
+			i915_mmio_reg_offset(GEN9_SLICE_PGCTL_ACK(s));
+		reg_offsets.eu_reg[2*s] =
+			i915_mmio_reg_offset(GEN9_SS01_EU_PGCTL_ACK(s));
+		reg_offsets.eu_reg[2*s + 1] =
+			i915_mmio_reg_offset(GEN9_SS23_EU_PGCTL_ACK(s));
+	}
+
+	bo = gen9_read_registers(dev_priv, reg_offsets.s_reg,
+				 sizeof(reg_offsets) / sizeof(u32));
+	if (IS_ERR(bo))
+		return PTR_ERR(bo);
+
+	reg_data = i915_gem_object_pin_map(bo, I915_MAP_WB);
+	if (IS_ERR(reg_data)) {
+		i915_gem_object_put(bo);
+		return PTR_ERR(reg_data);
 	}
 
 	eu_mask[0] = GEN9_PGCTL_SSA_EU08_ACK |
@@ -4390,7 +4517,7 @@ static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
 		     GEN9_PGCTL_SSB_EU311_ACK;
 
 	for (s = 0; s < info->sseu.max_slices; s++) {
-		if ((s_reg[s] & GEN9_PGCTL_SLICE_ACK) == 0)
+		if ((reg_data->s_reg[s] & GEN9_PGCTL_SLICE_ACK) == 0)
 			/* skip disabled slice */
 			continue;
 
@@ -4404,14 +4531,14 @@ static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
 			unsigned int eu_cnt;
 
 			if (IS_GEN9_LP(dev_priv)) {
-				if (!(s_reg[s] & (GEN9_PGCTL_SS_ACK(ss))))
+				if (!(reg_data->s_reg[s] & (GEN9_PGCTL_SS_ACK(ss))))
 					/* skip disabled subslice */
 					continue;
 
 				sseu->subslice_mask[s] |= BIT(ss);
 			}
 
-			eu_cnt = 2 * hweight32(eu_reg[2*s + ss/2] &
+			eu_cnt = 2 * hweight32(reg_data->eu_reg[2*s + ss/2] &
 					       eu_mask[ss%2]);
 			sseu->eu_total += eu_cnt;
 			sseu->eu_per_subslice = max_t(unsigned int,
@@ -4420,6 +4547,11 @@ static void gen9_sseu_device_status(struct drm_i915_private *dev_priv,
 		}
 	}
 #undef SS_MAX
+
+	i915_gem_object_unpin_map(bo);
+	i915_gem_object_put(bo);
+
+	return 0;
 }
 
 static void broadwell_sseu_device_status(struct drm_i915_private *dev_priv,
@@ -4491,6 +4623,7 @@ static int i915_sseu_status(struct seq_file *m, void *unused)
 {
 	struct drm_i915_private *dev_priv = node_to_i915(m->private);
 	struct sseu_dev_info sseu;
+	int ret = 0;
 
 	if (INTEL_GEN(dev_priv) < 8)
 		return -ENODEV;
@@ -4512,16 +4645,16 @@ static int i915_sseu_status(struct seq_file *m, void *unused)
 	} else if (IS_BROADWELL(dev_priv)) {
 		broadwell_sseu_device_status(dev_priv, &sseu);
 	} else if (IS_GEN9(dev_priv)) {
-		gen9_sseu_device_status(dev_priv, &sseu);
+		ret = gen9_sseu_device_status(dev_priv, &sseu);
 	} else if (INTEL_GEN(dev_priv) >= 10) {
-		gen10_sseu_device_status(dev_priv, &sseu);
+		ret = gen10_sseu_device_status(dev_priv, &sseu);
 	}
 
 	intel_runtime_pm_put(dev_priv);
 
 	i915_print_sseu_info(m, false, &sseu);
 
-	return 0;
+	return ret;
 }
 
 static int i915_forcewake_open(struct inode *inode, struct file *file)
