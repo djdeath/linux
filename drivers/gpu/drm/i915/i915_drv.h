@@ -1263,6 +1263,10 @@ struct i915_oa_config {
 	struct attribute *attrs[2];
 	struct device_attribute sysfs_metric_id;
 
+	struct drm_i915_gem_object *obj;
+
+	struct list_head vma_link;
+
 	atomic_t ref_count;
 };
 
@@ -1864,10 +1868,20 @@ struct drm_i915_private {
 		struct mutex metrics_lock;
 
 		/*
-		 * List of dynamic configurations, you need to hold
-		 * dev_priv->perf.metrics_lock to access it.
+		 * List of dynamic configurations (struct i915_oa_config), you
+		 * need to hold dev_priv->perf.metrics_lock to access it.
 		 */
 		struct idr metrics_idr;
+
+		/*
+		 * List of dynamic configurations (struct i915_oa_config)
+		 * which have an allocated buffer in GGTT for reconfiguration,
+		 * you need to hold dev_priv->perf.metrics_lock to access it.
+		 * Elements are added to the list lazilly on execbuf (when a
+		 * particular configuration is requested). The list is freed
+		 * upon closing the perf stream.
+		 */
+		struct list_head metrics_buffers;
 
 		/*
 		 * Lock associated with anything below within this structure
@@ -3161,6 +3175,11 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 void i915_oa_init_reg_state(struct intel_engine_cs *engine,
 			    struct i915_gem_context *ctx,
 			    u32 *reg_state);
+int i915_perf_get_oa_config(struct drm_i915_private *i915,
+			    int metrics_set,
+			    bool create_config_bo,
+			    struct i915_oa_config **out_config);
+void i915_oa_config_put(struct i915_oa_config *oa_config);
 
 /* i915_gem_evict.c */
 int __must_check i915_gem_evict_something(struct i915_address_space *vm,
