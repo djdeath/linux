@@ -559,6 +559,8 @@ typedef struct drm_i915_irq_wait {
  */
 #define I915_PARAM_MMAP_GTT_COHERENT	52
 
+#define I915_PARAM_HAS_EXEC_PERF_CONFIG 53
+
 typedef struct drm_i915_getparam {
 	__s32 param;
 	/*
@@ -1078,7 +1080,15 @@ struct drm_i915_gem_execbuffer2 {
  */
 #define I915_EXEC_FENCE_ARRAY   (1<<19)
 
-#define __I915_EXEC_UNKNOWN_FLAGS (-(I915_EXEC_FENCE_ARRAY<<1))
+/* Request that perf monitoring hardware be reprogrammed before executing the
+ * commands from the batch in the execbuf. The DR1 & DR4 fields of the execbuf
+ * must respectively contain the file descriptor of the perf monitoring device
+ * and the configuration to program.
+ */
+#define I915_EXEC_PERF_CONFIG   (1<<20)
+
+
+#define __I915_EXEC_UNKNOWN_FLAGS (-(I915_EXEC_PERF_CONFIG<<1))
 
 #define I915_EXEC_CONTEXT_ID_MASK	(0xffffffff)
 #define i915_execbuffer2_set_context_id(eb2, context) \

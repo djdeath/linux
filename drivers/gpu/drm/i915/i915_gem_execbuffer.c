@@ -285,6 +285,8 @@ struct i915_execbuffer {
 	 */
 	int lut_size;
 	struct hlist_head *buckets; /** ht for relocation handles */
+
+	struct i915_oa_config *oa_config; /** HW configuration for OA, NULL is not needed. */
 };
 
 #define exec_entry(EB, VMA) (&(EB)->exec[(VMA)->exec_flags - (EB)->flags])
@@ -1182,6 +1184,34 @@ static void clflush_write32(u32 *addr, u32 value, unsigned int flushes)
 		*addr = value;
 }
 
+static int
+get_execbuf_oa_config(struct drm_i915_private *dev_priv,
+		      int perf_fd, u32 oa_config_id,
+		      struct i915_oa_config **out_oa_config)
+{
+	struct file *perf_file;
+	int ret;
+
+	lockdep_assert_held(&dev_priv->drm.struct_mutex);
+
+	if (!dev_priv->perf.oa.exclusive_stream)
+		return -EINVAL;
+
+	perf_file = fget(perf_fd);
+	if (!perf_file)
+		return -EINVAL;
+
+	if (perf_file->private_data != dev_priv->perf.oa.exclusive_stream)
+		return -EINVAL;
+
+	fput(perf_file);
+
+	ret = i915_perf_get_oa_config(dev_priv, oa_config_id,
+				      true, out_oa_config);
+
+	return ret;
+}
+
 static int __reloc_gpu_alloc(struct i915_execbuffer *eb,
 			     struct i915_vma *vma,
 			     unsigned int len)
@@ -1939,12 +1969,15 @@ static bool i915_gem_check_execbuffer(struct drm_i915_gem_execbuffer2 *exec)
 			return false;
 	}
 
-	if (exec->DR4 == 0xffffffff) {
-		DRM_DEBUG("UXA submitting garbage DR4, fixing up\n");
-		exec->DR4 = 0;
+	/* We reuse DR1 & DR4 fields for passing the perf config detail. */
+	if (!(exec->flags & I915_EXEC_PERF_CONFIG)) {
+		if (exec->DR4 == 0xffffffff) {
+			DRM_DEBUG("UXA submitting garbage DR4, fixing up\n");
+			exec->DR4 = 0;
+		}
+		if (exec->DR1 || exec->DR4)
+			return false;
 	}
-	if (exec->DR1 || exec->DR4)
-		return false;
 
 	if ((exec->batch_start_offset | exec->batch_len) & 0x7)
 		return false;
@@ -2026,6 +2059,7 @@ add_to_client(struct i915_request *rq, struct drm_file *file)
 
 static int eb_submit(struct i915_execbuffer *eb)
 {
+	struct i915_perf_stream *stream = eb->i915->perf.oa.exclusive_stream;
 	int err;
 
 	err = eb_move_to_gpu(eb);
@@ -2048,6 +2082,66 @@ static int eb_submit(struct i915_execbuffer *eb)
 		err = eb->engine->emit_init_breadcrumb(eb->request);
 		if (err)
 			return err;
+	}
+
+	/* Only emit the OA reconfiguration when there is a change. */
+	if (eb->oa_config && stream->oa_config != eb->oa_config) {
+		struct drm_i915_private *i915 = eb->request->i915;
+		struct i915_vma *oa_config_vma;
+		struct i915_request *barrier;
+
+		oa_config_vma = i915_vma_instance(
+			i915_gem_object_get(eb->oa_config->obj),
+			&i915->ggtt.vm, NULL);
+		if (unlikely(IS_ERR(oa_config_vma))) {
+			err = PTR_ERR(oa_config_vma);
+			return err;
+		}
+
+		err = i915_vma_pin(oa_config_vma, 0, 0, PIN_GLOBAL);
+		if (err)
+			return err;
+
+		barrier = i915_request_alloc(eb->engine, i915->kernel_context);
+		if (IS_ERR(barrier)) {
+			i915_vma_unpin(oa_config_vma);
+			return PTR_ERR(barrier);
+		}
+
+		err = eb->engine->emit_bb_start(barrier,
+						oa_config_vma->node.start,
+						0, I915_DISPATCH_SECURE);
+		if (err) {
+			i915_request_add(barrier);
+			i915_vma_unpin(oa_config_vma);
+			return err;
+		}
+
+		swap(stream->oa_config, eb->oa_config);
+
+		err = i915_vma_move_to_active(oa_config_vma, barrier, 0);
+		if (err) {
+			i915_request_add(barrier);
+			i915_vma_unpin(oa_config_vma);
+			return err;
+		}
+
+		err = i915_vma_move_to_active(i915->perf.oa.noa_wait,
+					      barrier, 0);
+		if (err) {
+			i915_request_add(barrier);
+			i915_vma_unpin(oa_config_vma);
+			return err;
+		}
+
+		i915_vma_unpin(oa_config_vma);
+
+		err = i915_request_await_dma_fence(eb->request,
+						   &barrier->fence);
+		if (err)
+			return err;
+
+		i915_request_add(barrier);
 	}
 
 	err = eb->engine->emit_bb_start(eb->request,
@@ -2301,6 +2395,7 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	eb.buffer_count = args->buffer_count;
 	eb.batch_start_offset = args->batch_start_offset;
 	eb.batch_len = args->batch_len;
+	eb.oa_config = NULL;
 
 	eb.batch_flags = 0;
 	if (args->flags & I915_EXEC_SECURE) {
@@ -2356,6 +2451,18 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	err = eb_wait_for_ring(&eb); /* may temporarily drop struct_mutex */
 	if (unlikely(err))
 		goto err_unlock;
+
+	if (args->flags & I915_EXEC_PERF_CONFIG) {
+		if (!intel_engine_can_configure_oa(eb.engine)) {
+			err = -ENODEV;
+			goto err_unlock;
+		}
+
+		err = get_execbuf_oa_config(eb.i915, args->DR1, args->DR4,
+					    &eb.oa_config);
+		if (err)
+			goto err_unlock;
+	}
 
 	err = eb_relocate(&eb);
 	if (err) {
@@ -2499,6 +2606,8 @@ err_batch_unpin:
 	if (eb.batch_flags & I915_DISPATCH_SECURE)
 		i915_vma_unpin(eb.batch);
 err_vma:
+	if (eb.oa_config)
+		i915_oa_config_put(eb.oa_config);
 	if (eb.exec)
 		eb_release_vmas(&eb);
 err_unlock:

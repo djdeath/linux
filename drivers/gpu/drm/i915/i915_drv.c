@@ -447,6 +447,10 @@ static int i915_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_PARAM_MMAP_GTT_COHERENT:
 		value = INTEL_INFO(dev_priv)->has_coherent_ggtt;
 		break;
+	case I915_PARAM_HAS_EXEC_PERF_CONFIG:
+		/* Obviously requires perf support. */
+		value = dev_priv->perf.initialized;
+		break;
 	default:
 		DRM_DEBUG("Unknown parameter %d\n", param->param);
 		return -EINVAL;

@@ -2338,8 +2338,10 @@ int intel_init_render_ring_buffer(struct intel_engine_cs *engine)
 		engine->irq_enable_mask = I915_USER_INTERRUPT;
 	}
 
-	if (IS_HASWELL(dev_priv))
+	if (IS_HASWELL(dev_priv)) {
 		engine->emit_bb_start = hsw_emit_bb_start;
+		engine->flags |= I915_ENGINE_CAN_CONFIGURE_OA;
+	}
 
 	engine->init_hw = init_render_ring;
 

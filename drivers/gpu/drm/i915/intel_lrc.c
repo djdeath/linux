@@ -2445,6 +2445,8 @@ int logical_render_ring_init(struct intel_engine_cs *engine)
 	if (ret)
 		return ret;
 
+	engine->flags |= I915_ENGINE_CAN_CONFIGURE_OA;
+
 	/* Override some for render ring. */
 	engine->init_context = gen8_init_rcs_context;
 	engine->emit_flush = gen8_emit_flush_render;

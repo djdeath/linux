@@ -514,6 +514,7 @@ struct intel_engine_cs {
 #define I915_ENGINE_NEEDS_CMD_PARSER BIT(0)
 #define I915_ENGINE_SUPPORTS_STATS   BIT(1)
 #define I915_ENGINE_HAS_PREEMPTION   BIT(2)
+#define I915_ENGINE_CAN_CONFIGURE_OA BIT(3)
 	unsigned int flags;
 
 	/*
@@ -589,6 +590,12 @@ static inline bool
 intel_engine_has_preemption(const struct intel_engine_cs *engine)
 {
 	return engine->flags & I915_ENGINE_HAS_PREEMPTION;
+}
+
+static inline bool
+intel_engine_can_configure_oa(const struct intel_engine_cs *engine)
+{
+	return engine->flags & I915_ENGINE_CAN_CONFIGURE_OA;
 }
 
 static inline bool __execlists_need_preempt(int prio, int last)
