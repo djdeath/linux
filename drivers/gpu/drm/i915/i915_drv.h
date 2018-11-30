@@ -1395,6 +1395,12 @@ struct i915_perf_stream {
 	 * buffer should be checked for available data.
 	 */
 	u64 poll_oa_period;
+
+	/**
+	 * @oa_interrupt_monitor: Whether the stream will be notified by OA
+	 * interrupts.
+	 */
+	bool oa_interrupt_monitor;
 };
 
 /**
@@ -1886,6 +1892,21 @@ struct drm_i915_private {
 			struct hrtimer poll_check_timer;
 			wait_queue_head_t poll_wq;
 			bool pollin;
+
+			/**
+			 * Atomic counter incremented by the interrupt
+			 * handling code for each OA half full interrupt
+			 * received.
+			 */
+			atomic64_t half_full_count;
+
+			/**
+			 * Copy of the atomic half_full_count that was last
+			 * processed in the i915-perf driver. If both counters
+			 * differ, there is data available to read in the OA
+			 * buffer.
+			 */
+			u64 half_full_count_last;
 
 			/**
 			 * For rate limiting any notifications of spurious
