@@ -229,6 +229,7 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 #define MAX_ENGINE_CLASS	4
 
 #define OTHER_GTPM_INSTANCE	1
+#define OTHER_WDOAPERF_INSTANCE	2
 #define MAX_ENGINE_INSTANCE    3
 
 /* PCI config space */
@@ -640,6 +641,9 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 #define OABUFFER_SIZE_4M    (5 << 3)
 #define OABUFFER_SIZE_8M    (6 << 3)
 #define OABUFFER_SIZE_16M   (7 << 3)
+
+#define GEN8_OA_IMR _MMIO(0x2b20)
+#define  GEN8_OA_IMR_MASK_INTR (1 << 28)
 
 /*
  * Flexible, Aggregate EU Counter Registers.
@@ -2923,7 +2927,9 @@ enum i915_power_well_id {
 #define GT_BLT_USER_INTERRUPT			(1 << 22)
 #define GT_BSD_CS_ERROR_INTERRUPT		(1 << 15)
 #define GT_BSD_USER_INTERRUPT			(1 << 12)
+#define GEN8_GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT (1 << 12) /* bdw+ */
 #define GT_RENDER_L3_PARITY_ERROR_INTERRUPT_S1	(1 << 11) /* hsw+; rsvd on snb, ivb, vlv */
+#define GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT   (1 <<  9) /* ivb+ but only used on hsw+ */
 #define GT_CONTEXT_SWITCH_INTERRUPT		(1 <<  8)
 #define GT_RENDER_L3_PARITY_ERROR_INTERRUPT	(1 <<  5) /* !snb */
 #define GT_RENDER_PIPECTL_NOTIFY_INTERRUPT	(1 <<  4)
@@ -7246,6 +7252,7 @@ enum {
 #define  GEN8_DE_PIPE_B_IRQ		(1 << 17)
 #define  GEN8_DE_PIPE_A_IRQ		(1 << 16)
 #define  GEN8_DE_PIPE_IRQ(pipe)		(1 << (16 + (pipe)))
+#define  GEN8_GT_WDBOX_OACS_IRQ         (1 << 7)
 #define  GEN8_GT_VECS_IRQ		(1 << 6)
 #define  GEN8_GT_GUC_IRQ		(1 << 5)
 #define  GEN8_GT_PM_IRQ			(1 << 4)

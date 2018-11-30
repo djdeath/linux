@@ -337,6 +337,7 @@ static const struct i915_oa_format gen8_plus_oa_formats[I915_OA_FORMAT_MAX] = {
  * @oa_period_exponent: The OA unit sampling period is derived from this
  * @poll_oa_period: The period at which the CPU will check for OA data
  * availability
+ * @oa_interrupt_monitor: Whether we should monitor the OA interrupt.
  *
  * As read_properties_unlocked() enumerates and validates the properties given
  * to open a stream of metrics the configuration is built up in the structure
@@ -354,6 +355,7 @@ struct perf_open_properties {
 	bool oa_periodic;
 	int oa_period_exponent;
 	u64 poll_oa_period;
+	bool oa_interrupt_monitor;
 };
 
 static void free_oa_config(struct drm_i915_private *dev_priv,
@@ -1838,6 +1840,13 @@ static void gen7_oa_enable(struct i915_perf_stream *stream)
 	 */
 	gen7_init_oa_buffer(dev_priv);
 
+	if (stream->oa_interrupt_monitor) {
+		spin_lock_irq(&dev_priv->irq_lock);
+		gen5_enable_gt_irq(dev_priv,
+				   GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT);
+		spin_unlock_irq(&dev_priv->irq_lock);
+	}
+
 	I915_WRITE(GEN7_OACONTROL,
 		   (ctx_id & GEN7_OACONTROL_CTX_MASK) |
 		   (period_exponent <<
@@ -1863,6 +1872,9 @@ static void gen8_oa_enable(struct i915_perf_stream *stream)
 	 * memory which this helps maintains.
 	 */
 	gen8_init_oa_buffer(dev_priv);
+
+	if (stream->oa_interrupt_monitor)
+		I915_WRITE(GEN8_OA_IMR, ~GEN8_OA_IMR_MASK_INTR);
 
 	/*
 	 * Note: we don't rely on the hardware to perform single context
@@ -1893,6 +1905,10 @@ static void i915_oa_stream_enable(struct i915_perf_stream *stream)
 	 */
 	dev_priv->perf.oa.pollin = false;
 
+	dev_priv->perf.oa.half_full_count_last = 0;
+	atomic64_set(&dev_priv->perf.oa.half_full_count,
+		     dev_priv->perf.oa.half_full_count_last);
+
 	dev_priv->perf.oa.ops.oa_enable(stream);
 
 	if (dev_priv->perf.oa.periodic && stream->poll_oa_period)
@@ -1905,6 +1921,13 @@ static void gen7_oa_disable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
 
+	if (stream->oa_interrupt_monitor) {
+		spin_lock_irq(&dev_priv->irq_lock);
+		gen5_disable_gt_irq(dev_priv,
+				    GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT);
+		spin_unlock_irq(&dev_priv->irq_lock);
+	}
+
 	I915_WRITE(GEN7_OACONTROL, 0);
 	if (intel_wait_for_register(dev_priv,
 				    GEN7_OACONTROL, GEN7_OACONTROL_ENABLE, 0,
@@ -1915,6 +1938,8 @@ static void gen7_oa_disable(struct i915_perf_stream *stream)
 static void gen8_oa_disable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	I915_WRITE(GEN8_OA_IMR, 0xffffffff);
 
 	I915_WRITE(GEN8_OACONTROL, 0);
 	if (intel_wait_for_register(dev_priv,
@@ -2591,6 +2616,7 @@ i915_perf_open_ioctl_locked(struct drm_i915_private *dev_priv,
 	stream->dev_priv = dev_priv;
 	stream->ctx = specific_ctx;
 	stream->poll_oa_period = props->poll_oa_period;
+	stream->oa_interrupt_monitor = props->oa_interrupt_monitor;
 
 	ret = i915_oa_stream_init(stream, param, props);
 	if (ret)

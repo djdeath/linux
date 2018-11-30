@@ -2304,6 +2304,8 @@ int intel_init_render_ring_buffer(struct intel_engine_cs *engine)
 
 	if (HAS_L3_DPF(dev_priv))
 		engine->irq_keep_mask = GT_RENDER_L3_PARITY_ERROR_INTERRUPT;
+	if (IS_HASWELL(dev_priv))
+		engine->irq_keep_mask |= GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT;
 
 	engine->irq_enable_mask = GT_RENDER_USER_INTERRUPT;
 

@@ -1171,6 +1171,12 @@ static void ironlake_rps_change_irq_handler(struct drm_i915_private *dev_priv)
 	return;
 }
 
+static void notify_perfmon_buffer_half_full(struct drm_i915_private *i915)
+{
+	atomic64_inc(&i915->perf.oa.half_full_count);
+	wake_up_all(&i915->perf.oa.poll_wq);
+}
+
 static void vlv_c0_read(struct drm_i915_private *dev_priv,
 			struct intel_rps_ei *ei)
 {
@@ -1447,6 +1453,9 @@ static void snb_gt_irq_handler(struct drm_i915_private *dev_priv,
 		      GT_RENDER_CS_MASTER_ERROR_INTERRUPT))
 		DRM_DEBUG("Command parser error, gt_iir 0x%08x\n", gt_iir);
 
+	if (gt_iir & GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT)
+		notify_perfmon_buffer_half_full(dev_priv);
+
 	if (gt_iir & GT_PARITY_ERROR(dev_priv))
 		ivybridge_parity_error_irq_handler(dev_priv, gt_iir);
 }
@@ -1468,6 +1477,12 @@ gen8_cs_irq_handler(struct intel_engine_cs *engine, u32 iir)
 		tasklet_hi_schedule(&engine->execlists.tasklet);
 }
 
+static void gen8_perfmon_handler(struct drm_i915_private *i915, u32 iir)
+{
+	if (iir & GEN8_GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT)
+		notify_perfmon_buffer_half_full(i915);
+}
+
 static void gen8_gt_irq_ack(struct drm_i915_private *i915,
 			    u32 master_ctl, u32 gt_iir[4])
 {
@@ -1477,6 +1492,7 @@ static void gen8_gt_irq_ack(struct drm_i915_private *i915,
 		      GEN8_GT_BCS_IRQ | \
 		      GEN8_GT_VCS1_IRQ | \
 		      GEN8_GT_VCS2_IRQ | \
+		      GEN8_GT_WDBOX_OACS_IRQ | \
 		      GEN8_GT_VECS_IRQ | \
 		      GEN8_GT_PM_IRQ | \
 		      GEN8_GT_GUC_IRQ)
@@ -1499,7 +1515,7 @@ static void gen8_gt_irq_ack(struct drm_i915_private *i915,
 			raw_reg_write(regs, GEN8_GT_IIR(2), gt_iir[2]);
 	}
 
-	if (master_ctl & GEN8_GT_VECS_IRQ) {
+	if (master_ctl & (GEN8_GT_VECS_IRQ | GEN8_GT_WDBOX_OACS_IRQ)) {
 		gt_iir[3] = raw_reg_read(regs, GEN8_GT_IIR(3));
 		if (likely(gt_iir[3]))
 			raw_reg_write(regs, GEN8_GT_IIR(3), gt_iir[3]);
@@ -1523,9 +1539,11 @@ static void gen8_gt_irq_handler(struct drm_i915_private *i915,
 				    gt_iir[1] >> GEN8_VCS2_IRQ_SHIFT);
 	}
 
-	if (master_ctl & GEN8_GT_VECS_IRQ) {
+	if (master_ctl & (GEN8_GT_VECS_IRQ | GEN8_GT_WDBOX_OACS_IRQ)) {
 		gen8_cs_irq_handler(i915->engine[VECS],
 				    gt_iir[3] >> GEN8_VECS_IRQ_SHIFT);
+		gen8_perfmon_handler(i915,
+				     gt_iir[3] >> GEN8_WD_IRQ_SHIFT);
 	}
 
 	if (master_ctl & (GEN8_GT_PM_IRQ | GEN8_GT_GUC_IRQ)) {
@@ -2936,6 +2954,8 @@ gen11_other_irq_handler(struct drm_i915_private * const i915,
 {
 	if (instance == OTHER_GTPM_INSTANCE)
 		return gen6_rps_irq_handler(i915, iir);
+	if (instance == OTHER_WDOAPERF_INSTANCE)
+		return gen8_perfmon_handler(i915, iir);
 
 	WARN_ONCE(1, "unhandled other interrupt instance=0x%x, iir=0x%x\n",
 		  instance, iir);
@@ -3769,6 +3789,10 @@ static void gen5_gt_irq_postinstall(struct drm_device *dev)
 		gt_irqs |= GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT;
 	}
 
+	/* We only expose the i915/perf interface on HSW+. */
+	if (IS_HASWELL(dev_priv))
+		gt_irqs |= GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT;
+
 	GEN3_IRQ_INIT(GT, dev_priv->gt_irq_mask, gt_irqs);
 
 	if (INTEL_GEN(dev_priv) >= 6) {
@@ -3898,7 +3922,8 @@ static void gen8_gt_irq_postinstall(struct drm_i915_private *dev_priv)
 			GT_CONTEXT_SWITCH_INTERRUPT << GEN8_VCS2_IRQ_SHIFT,
 		0,
 		GT_RENDER_USER_INTERRUPT << GEN8_VECS_IRQ_SHIFT |
-			GT_CONTEXT_SWITCH_INTERRUPT << GEN8_VECS_IRQ_SHIFT
+			GT_CONTEXT_SWITCH_INTERRUPT << GEN8_VECS_IRQ_SHIFT |
+			GEN8_GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT << GEN8_WD_IRQ_SHIFT
 		};
 
 	dev_priv->pm_ier = 0x0;
@@ -4017,12 +4042,12 @@ static void gen11_gt_irq_postinstall(struct drm_i915_private *dev_priv)
 
 	/*
 	 * RPS interrupts will get enabled/disabled on demand when RPS itself
-	 * is enabled/disabled.
+	 * is enabled/disabled, just enable the OA interrupt for now.
 	 */
-	dev_priv->pm_ier = 0x0;
+	dev_priv->pm_ier = GEN8_GT_PERFMON_BUFFER_HALF_FULL_INTERRUPT;
 	dev_priv->pm_imr = ~dev_priv->pm_ier;
-	I915_WRITE(GEN11_GPM_WGBOXPERF_INTR_ENABLE, 0);
-	I915_WRITE(GEN11_GPM_WGBOXPERF_INTR_MASK,  ~0);
+	I915_WRITE(GEN11_GPM_WGBOXPERF_INTR_ENABLE, dev_priv->pm_ier);
+	I915_WRITE(GEN11_GPM_WGBOXPERF_INTR_MASK,  dev_priv->pm_imr);
 }
 
 static void icp_irq_postinstall(struct drm_device *dev)
