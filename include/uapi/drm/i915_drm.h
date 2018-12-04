@@ -1657,6 +1657,16 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_POLL_OA_DELAY,
 
+	/**
+	 * Specifying this property sets up the interrupt mechanism for the OA
+	 * buffer in i915. This option in conjuction with a long polling delay
+	 * for avaibility of OA data can reduce CPU load significantly if you
+	 * do not care about OA data being read as soon as it's available.
+	 *
+	 * This property is available in perf revision 2.
+	 */
+	DRM_I915_PERF_PROP_OA_ENABLE_INTERRUPT,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 

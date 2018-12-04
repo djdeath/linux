@@ -243,7 +243,7 @@
  * oa_buffer_check().
  *
  * Most of the implementation details for this workaround are in
- * oa_buffer_check_unlocked() and _append_oa_reports()
+ * oa_buffer_check() and _append_oa_reports()
  *
  * Note for posterity: previously the driver used to define an effective tail
  * pointer that lagged the real pointer by a 'tail margin' measured in bytes
@@ -418,9 +418,11 @@ static u32 gen7_oa_hw_tail_read(struct drm_i915_private *dev_priv)
 	return oastatus1 & GEN7_OASTATUS1_TAIL_MASK;
 }
 
+
 /**
- * oa_buffer_check_unlocked - check for data and update tail ptr state
+ * oa_buffer_check - check for data and update tail ptr state
  * @dev_priv: i915 device instance
+ * @lock: whether to take the oa_buffer spin lock
  *
  * This is either called via fops (for blocking reads in user ctx) or the poll
  * check hrtimer (atomic ctx) to check the OA buffer tail pointer and check
@@ -442,8 +444,9 @@ static u32 gen7_oa_hw_tail_read(struct drm_i915_private *dev_priv)
  *
  * Returns: %true if the OA buffer contains data, else %false
  */
-static bool oa_buffer_check_unlocked(struct drm_i915_private *dev_priv)
+static bool oa_buffer_check(struct drm_i915_private *dev_priv, bool lock)
 {
+	u64 half_full_count = atomic64_read(&dev_priv->perf.oa.half_full_count);
 	u32 gtt_offset = i915_ggtt_offset(dev_priv->perf.oa.oa_buffer.vma);
 	int report_size = dev_priv->perf.oa.oa_buffer.format_size;
 	unsigned long flags;
@@ -454,7 +457,8 @@ static bool oa_buffer_check_unlocked(struct drm_i915_private *dev_priv)
 	 * could result in an OA buffer reset which might reset the head,
 	 * tails[] and aged_tail state.
 	 */
-	spin_lock_irqsave(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
+	if (lock)
+		spin_lock_irqsave(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 
 	hw_tail = dev_priv->perf.oa.ops.oa_hw_tail_read(dev_priv);
 
@@ -530,7 +534,10 @@ static bool oa_buffer_check_unlocked(struct drm_i915_private *dev_priv)
 		dev_priv->perf.oa.oa_buffer.aging_timestamp = now;
 	}
 
-	spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
+	dev_priv->perf.oa.half_full_count_last = half_full_count;
+
+	if (lock)
+		spin_unlock_irqrestore(&dev_priv->perf.oa.oa_buffer.ptr_lock, flags);
 
 	return OA_TAKEN(dev_priv->perf.oa.oa_buffer.tail - gtt_offset,
 			dev_priv->perf.oa.oa_buffer.head - gtt_offset) >= report_size;
@@ -1124,9 +1131,9 @@ static int gen7_oa_read(struct i915_perf_stream *stream,
  * i915_oa_wait_unlocked - handles blocking IO until OA data available
  * @stream: An i915-perf stream opened for OA metrics
  *
- * Called when userspace tries to read() from a blocking stream FD opened
- * for OA metrics. It waits until the hrtimer callback finds a non-empty
- * OA buffer and wakes us.
+ * Called when userspace tries to read() from a blocking stream FD opened for
+ * OA metrics. It waits until either the hrtimer callback finds a non-empty OA
+ * buffer or the OA interrupt kicks in and wakes us.
  *
  * Note: it's acceptable to have this return with some false positives
  * since any subsequent read handling will return -EAGAIN if there isn't
@@ -1143,7 +1150,7 @@ static int i915_oa_wait_unlocked(struct i915_perf_stream *stream)
 		return -EIO;
 
 	return wait_event_interruptible(dev_priv->perf.oa.poll_wq,
-					oa_buffer_check_unlocked(dev_priv));
+					oa_buffer_check(dev_priv, true));
 }
 
 /**
@@ -1962,6 +1969,10 @@ static void i915_oa_stream_disable(struct i915_perf_stream *stream)
 
 	dev_priv->perf.oa.ops.oa_disable(stream);
 
+	dev_priv->perf.oa.half_full_count_last = 0;
+	atomic64_set(&dev_priv->perf.oa.half_full_count,
+		     dev_priv->perf.oa.half_full_count_last);
+
 	if (dev_priv->perf.oa.periodic)
 		hrtimer_cancel(&dev_priv->perf.oa.poll_check_timer);
 }
@@ -2288,7 +2299,7 @@ static enum hrtimer_restart oa_poll_check_timer_cb(struct hrtimer *hrtimer)
 			     perf.oa.poll_check_timer);
 	struct i915_perf_stream *stream = dev_priv->perf.oa.exclusive_stream;
 
-	if (oa_buffer_check_unlocked(dev_priv)) {
+	if (oa_buffer_check(dev_priv, true)) {
 		dev_priv->perf.oa.pollin = true;
 		wake_up(&dev_priv->perf.oa.poll_wq);
 	}
@@ -2323,6 +2334,16 @@ static __poll_t i915_perf_poll_locked(struct drm_i915_private *dev_priv,
 	__poll_t events = 0;
 
 	stream->ops->poll_wait(stream, file, wait);
+
+	/*
+	 * Only check the half buffer full notifications if requested by the
+	 * user.
+	 */
+	if (stream->oa_interrupt_monitor &&
+	    (dev_priv->perf.oa.half_full_count_last !=
+	     atomic64_read(&dev_priv->perf.oa.half_full_count))) {
+		dev_priv->perf.oa.pollin = oa_buffer_check(dev_priv, true);
+	}
 
 	/* Note: we don't explicitly check whether there's something to read
 	 * here since this path may be very hot depending on what else
@@ -2807,6 +2828,9 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 			}
 			props->poll_oa_period = value;
 			break;
+		case DRM_I915_PERF_PROP_OA_ENABLE_INTERRUPT:
+			props->oa_interrupt_monitor = value != 0;
+			break;
 		case DRM_I915_PERF_PROP_MAX:
 			MISSING_CASE(id);
 			return -EINVAL;
@@ -2817,12 +2841,14 @@ static int read_properties_unlocked(struct drm_i915_private *dev_priv,
 
 	/*
 	 * Blocking read need to be waken up by some mechanism. If no polling
-	 * of the HEAD/TAIL register is done by the kernel, we'll never be
-	 * able to wake up.
+	 * of the HEAD/TAIL register is done by the kernel and no interrupt is
+	 * enabled, we'll never be able to wake up.
 	 */
 	if ((open_flags & I915_PERF_FLAG_FD_NONBLOCK) == 0 &&
-	    !props->poll_oa_period) {
-		DRM_DEBUG("Requesting a blocking stream with no polling period.\n");
+	    !props->poll_oa_period &&
+	    !props->oa_interrupt_monitor) {
+		DRM_DEBUG("Requesting a blocking stream with no polling period "
+			  "& no interrupt.\n");
 		return -EINVAL;
 	}
 
