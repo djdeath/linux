@@ -1394,6 +1394,12 @@ struct i915_perf_stream {
 	 * @oa_config: The OA configuration used by the stream.
 	 */
 	struct i915_oa_config *oa_config;
+
+	/**
+	 * @poll_oa_period: The period in nanoseconds at which the OA
+	 * buffer should be checked for available data.
+	 */
+	u64 poll_oa_period;
 };
 
 /**

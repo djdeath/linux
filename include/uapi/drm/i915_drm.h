@@ -1647,6 +1647,16 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_OA_EXPONENT,
 
+	/**
+	 * Specifying this property sets up a hrtimer in nanoseconds at which
+	 * the i915 driver will check the OA buffer for available data. A
+	 * value of 0 means no hrtimer will be started. Values below 100
+	 * microseconds are not allowed.
+	 *
+	 * This property is available in perf revision 2.
+	 */
+	DRM_I915_PERF_PROP_POLL_OA_DELAY,
+
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 
