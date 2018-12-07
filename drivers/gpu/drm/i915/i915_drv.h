@@ -1892,6 +1892,12 @@ struct drm_i915_private {
 			 */
 			struct ratelimit_state spurious_report_rs;
 
+			/**
+			 * For rate limiting any notifications of tail pointer
+			 * race.
+			 */
+			struct ratelimit_state tail_pointer_race;
+
 			bool periodic;
 			int period_exponent;
 
@@ -1932,23 +1938,11 @@ struct drm_i915_private {
 				spinlock_t ptr_lock;
 
 				/**
-				 * One 'aging' tail pointer and one 'aged'
-				 * tail pointer ready to used for reading.
-				 *
-				 * Initial values of 0xffffffff are invalid
-				 * and imply that an update is required
-				 * (and should be ignored by an attempted
-				 * read)
+				 * The last HW tail reported by HW. The data
+				 * might not have made it to memory yet
+				 * though.
 				 */
-				struct {
-					u32 offset;
-				} tails[2];
-
-				/**
-				 * Index for the aged tail ready to read()
-				 * data up to.
-				 */
-				unsigned int aged_tail_idx;
+				u32 aging_tail;
 
 				/**
 				 * A monotonic timestamp for when the current
@@ -1967,6 +1961,12 @@ struct drm_i915_private {
 				 * data to userspace.
 				 */
 				u32 head;
+
+				/**
+				 * The last tail verified tail that can be
+				 * read by userspace.
+				 */
+				u32 tail;
 			} oa_buffer;
 
 			u32 gen7_latched_oastatus1;
