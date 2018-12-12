@@ -2019,6 +2019,14 @@ struct drm_i915_private {
 
 			struct i915_oa_ops ops;
 			const struct i915_oa_format *oa_formats;
+
+			/**
+			 * A batch buffer doing a wait on the GPU for the NOA
+			 * logic to be reprogrammed.
+			 */
+			struct i915_vma *noa_wait;
+
+			atomic64_t noa_programming_delay;
 		} oa;
 	} perf;
 

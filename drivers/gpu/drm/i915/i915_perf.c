@@ -396,10 +396,12 @@ static int alloc_oa_config_buffer(struct drm_i915_private *i915,
 				  struct i915_oa_config *oa_config)
 {
 	struct drm_i915_gem_object *bo;
-	size_t config_length = 0;
-	int ret;
+	size_t config_length;
 	u32 *cs;
 
+	lockdep_assert_held(&i915->drm.struct_mutex);
+
+	config_length = (INTEL_GEN(i915) < 8 ? 16 : 36); /* OACONTROL reset */
 	if (oa_config->mux_regs_len > 0) {
 		config_length += DIV_ROUND_UP(oa_config->mux_regs_len,
 					      MI_LOAD_REGISTER_IMM_MAX_REGS) * 4;
@@ -415,7 +417,7 @@ static int alloc_oa_config_buffer(struct drm_i915_private *i915,
 					      MI_LOAD_REGISTER_IMM_MAX_REGS) * 4;
 		config_length += oa_config->flex_regs_len * 8;
 	}
-	config_length += 4; /* MI_BATCH_BUFFER_END */
+	config_length += 12; /* MI_BATCH_BUFFER_START into noa_wait loop */
 	config_length = ALIGN(config_length, I915_GTT_PAGE_SIZE);
 
 	ret = i915_mutex_lock_interruptible(&i915->drm);
@@ -434,13 +436,48 @@ static int alloc_oa_config_buffer(struct drm_i915_private *i915,
 		goto err_unref;
 	}
 
-	memset(cs, 0, config_length);
+	if (INTEL_GEN(i915) < 8) {
+		*cs++ = GFX_OP_PIPE_CONTROL(5);
+		*cs++ = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_MMIO_WRITE;
+		*cs++ = i915_mmio_reg_offset(GEN7_OACONTROL);
+		*cs++ = 0;
+	} else {
+		/**
+		 * Project SKL:
+		 *
+		 *    "PIPECONTROL command with “Command Streamer Stall
+		 *    Enable” must be programmed prior to programming a
+		 *    PIPECONTROL command with LRI Post Sync Operation in
+		 *    GPGPU mode of operation (i.e when PIPELINE_SELECT
+		 *    command is set to GPGPU mode of operation)."
+		 */
+		*cs++ = GFX_OP_PIPE_CONTROL(6);
+		*cs++ = PIPE_CONTROL_CS_STALL |
+			PIPE_CONTROL_STALL_AT_SCOREBOARD;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+
+		*cs++ = GFX_OP_PIPE_CONTROL(6);
+		*cs++ = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_MMIO_WRITE;
+		*cs++ = i915_mmio_reg_offset(INTEL_GEN(i915) < 8 ?
+					     GEN7_OACONTROL : GEN8_OACONTROL);
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+	}
 
 	cs = write_cs_mi_lri(cs, oa_config->mux_regs, oa_config->mux_regs_len);
 	cs = write_cs_mi_lri(cs, oa_config->b_counter_regs, oa_config->b_counter_regs_len);
 	cs = write_cs_mi_lri(cs, oa_config->flex_regs, oa_config->flex_regs_len);
 
-	*cs++ = MI_BATCH_BUFFER_END;
+
+	/* Jump into the NOA wait busy loop. */
+	*cs++ = (INTEL_GEN(i915) < 8 ?
+		 MI_BATCH_BUFFER_START : MI_BATCH_BUFFER_START_GEN8);
+	*cs++ = i915->perf.oa.noa_wait->node.start;
+	*cs++ = 0;
 
 	i915_gem_object_unpin_map(bo);
 
@@ -1455,6 +1492,9 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 
 		ce->arb_enable = MI_ARB_ENABLE;
 	}
+
+	i915_vma_unpin_and_release(&dev_priv->perf.oa.noa_wait, 0);
+
 	mutex_unlock(&dev_priv->drm.struct_mutex);
 
 	free_oa_buffer(dev_priv);
@@ -1638,6 +1678,199 @@ err_unref:
 
 unlock:
 	mutex_unlock(&dev_priv->drm.struct_mutex);
+	return ret;
+}
+
+static int alloc_noa_wait(struct drm_i915_private *i915)
+{
+	struct drm_i915_gem_object *bo;
+	struct i915_vma *vma;
+	u64 delay_ns = atomic64_read(&i915->perf.oa.noa_programming_delay), delay_ticks;
+	u32 *batch, *cs, *jump;
+	int ret;
+
+	ret = i915_mutex_lock_interruptible(&i915->drm);
+	if (ret)
+		return ret;
+
+	bo = i915_gem_object_create(i915, 4096);
+	if (IS_ERR(bo)) {
+		DRM_ERROR("Failed to allocate NOA wait batchbuffer\n");
+		ret = PTR_ERR(bo);
+		goto unlock;
+	}
+
+	/*
+	 * We pin in GGTT because we jump into this buffer now because
+	 * multiple OA config BOs will have a jump to this address and it
+	 * needs to be fixed during the lifetime of the i915/perf stream.
+	 */
+	vma = i915_gem_object_ggtt_pin(bo, NULL, 0, 4096, 0);
+	if (IS_ERR(vma)) {
+		ret = PTR_ERR(vma);
+		goto err_unref;
+	}
+
+	batch = cs = i915_gem_object_pin_map(bo, I915_MAP_WB);
+	if (IS_ERR(batch)) {
+		ret = PTR_ERR(batch);
+		goto err_unpin;
+	}
+
+	/*
+	 * Initial snapshot of the timestamp register to implement the wait.
+	 * We work with 32b values, so clear out the top 32b bits of the
+	 * register because the ALU works 64bits.
+	 */
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(0)) + 4;
+	*cs++ = 0;
+	*cs++ = MI_LOAD_REGISTER_REG | (3 - 2);
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(RENDER_RING_BASE));
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(0));
+
+	/*
+	 * This is the location we're going to jump back into until the
+	 * required amount of time has passed.
+	 */
+	jump = cs;
+
+	/*
+	 * Take another snapshot of the timestamp register. Take care to clear
+	 * up the top 32bits of CS_GPR(1) as we're using it for other
+	 * operations below.
+	 */
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(1)) + 4;
+	*cs++ = 0;
+	*cs++ = MI_LOAD_REGISTER_REG | (3 - 2);
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(RENDER_RING_BASE));
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(1));
+
+	/*
+	 * Do a diff between the 2 timestamps and store the result back into
+	 * CS_GPR(1).
+	 */
+	*cs++ = MI_MATH(5);
+	*cs++ = MI_ALU_OP(MI_ALU_OP_LOAD, MI_ALU_SRC_SRCA, MI_ALU_SRC_REG(1));
+	*cs++ = MI_ALU_OP(MI_ALU_OP_LOAD, MI_ALU_SRC_SRCB, MI_ALU_SRC_REG(0));
+	*cs++ = MI_ALU_OP(MI_ALU_OP_SUB, 0, 0);
+	*cs++ = MI_ALU_OP(MI_ALU_OP_STORE, MI_ALU_SRC_REG(2), MI_ALU_SRC_ACCU);
+	*cs++ = MI_ALU_OP(MI_ALU_OP_STORE, MI_ALU_SRC_REG(3), MI_ALU_SRC_CF);
+
+	/*
+	 * Transfer the carry flag (set to 1 if ts1 < ts0, meaning the
+	 * timestamp have rolled over the 32bits) into the predicate register
+	 * to be used for the predicated jump.
+	 */
+	*cs++ = MI_LOAD_REGISTER_REG | (3 - 2);
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(3));
+	*cs++ = i915_mmio_reg_offset(MI_PREDICATE_RESULT_1);
+
+	/* Restart from the beginning if we had timestamps roll over. */
+	*cs++ = (INTEL_GEN(i915) < 8 ?
+		 MI_BATCH_BUFFER_START : MI_BATCH_BUFFER_START_GEN8) |
+		MI_BATCH_PREDICATE;
+	*cs++ = vma->node.start;
+	*cs++ = 0;
+
+	/*
+	 * Now add the diff between to previous timestamps and add it to :
+	 *      (((1 * << 64) - 1) - delay_ns)
+	 *
+	 * When the Carry Flag contains 1 this means the elapsed time is
+	 * longer than the expected delay, and we can exit the wait loop.
+	 */
+	delay_ticks = 0xffffffffffffffff -
+		DIV64_U64_ROUND_UP(delay_ns *
+				   RUNTIME_INFO(i915)->cs_timestamp_frequency_khz,
+				   1000000ull);
+	*cs++ = MI_LOAD_REGISTER_IMM(2);
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(4));
+	*cs++ = lower_32_bits(delay_ticks);
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(4)) + 4;
+	*cs++ = upper_32_bits(delay_ticks);
+
+	*cs++ = MI_MATH(4);
+	*cs++ = MI_ALU_OP(MI_ALU_OP_LOAD, MI_ALU_SRC_SRCA, MI_ALU_SRC_REG(2));
+	*cs++ = MI_ALU_OP(MI_ALU_OP_LOAD, MI_ALU_SRC_SRCB, MI_ALU_SRC_REG(4));
+	*cs++ = MI_ALU_OP(MI_ALU_OP_ADD, 0, 0);
+	*cs++ = MI_ALU_OP(MI_ALU_OP_STOREINV, MI_ALU_SRC_REG(5), MI_ALU_SRC_CF);
+
+	/*
+	 * Transfer the result into the predicate register to be used for the
+	 * predicated jump.
+	 */
+	*cs++ = MI_LOAD_REGISTER_REG | (3 - 2);
+	*cs++ = i915_mmio_reg_offset(HSW_CS_GPR(5));
+	*cs++ = i915_mmio_reg_offset(MI_PREDICATE_RESULT_1);
+
+	/* Predicate the jump.  */
+	*cs++ = (INTEL_GEN(i915) < 8 ?
+		 MI_BATCH_BUFFER_START : MI_BATCH_BUFFER_START_GEN8) |
+		MI_BATCH_PREDICATE;
+	*cs++ = vma->node.start + (jump - batch) * 4;
+	*cs++ = 0;
+
+	/* Clear the predicate register */
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(MI_PREDICATE_RESULT_1);
+	*cs++ = 0;
+
+	/* Reenable OA. */
+	if (INTEL_GEN(i915) < 8) {
+		struct i915_perf_stream *stream =
+			i915->perf.oa.exclusive_stream;
+		struct i915_gem_context *ctx = stream->ctx;
+
+		*cs++ = GFX_OP_PIPE_CONTROL(4);
+		*cs++ = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_MMIO_WRITE;
+		*cs++ = i915_mmio_reg_offset(GEN7_OACONTROL);
+		*cs++ = (i915->perf.oa.specific_ctx_id &
+			 GEN7_OACONTROL_CTX_MASK) |
+			(i915->perf.oa.period_exponent <<
+			 GEN7_OACONTROL_TIMER_PERIOD_SHIFT) |
+			(i915->perf.oa.periodic ?
+			 GEN7_OACONTROL_TIMER_ENABLE : 0) |
+			(i915->perf.oa.oa_buffer.format <<
+			 GEN7_OACONTROL_FORMAT_SHIFT) |
+			(ctx ? GEN7_OACONTROL_PER_CTX_ENABLE : 0) |
+			GEN7_OACONTROL_ENABLE;
+	} else {
+		*cs++ = GFX_OP_PIPE_CONTROL(6);
+		*cs++ = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+
+		*cs++ = GFX_OP_PIPE_CONTROL(6);
+		*cs++ = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_MMIO_WRITE;
+		*cs++ = i915_mmio_reg_offset(GEN8_OACONTROL);
+		*cs++ = 0;
+		*cs++ = (i915->perf.oa.oa_buffer.format <<
+			 GEN8_OA_REPORT_FORMAT_SHIFT) |
+			GEN8_OA_COUNTER_ENABLE;
+		*cs++ = 0;
+	}
+
+	/* And return to the ring. */
+	*cs++ = MI_BATCH_BUFFER_END;
+
+	i915_gem_object_unpin_map(bo);
+
+	i915->perf.oa.noa_wait = vma;
+
+	goto unlock;
+
+err_unpin:
+	__i915_vma_unpin(vma);
+
+err_unref:
+	i915_gem_object_put(bo);
+
+unlock:
+	mutex_unlock(&i915->drm.struct_mutex);
 	return ret;
 }
 
@@ -2235,6 +2468,12 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		goto err_config;
 	}
 
+	ret = alloc_noa_wait(dev_priv);
+	if (ret) {
+		DRM_DEBUG("Unable to allocate NOA wait batch buffer\n");
+		goto err_noa_wait_alloc;
+	}
+
 	/* PRM - observability performance counters:
 	 *
 	 *   OACONTROL, performance counter enable, note:
@@ -2289,10 +2528,15 @@ err_lock:
 	free_oa_buffer(dev_priv);
 
 err_oa_buf_alloc:
-	i915_oa_config_put(stream->oa_config);
-
 	intel_uncore_forcewake_put(dev_priv, FORCEWAKE_ALL);
 	intel_runtime_pm_put(dev_priv, stream->wakeref);
+
+	mutex_lock(&dev_priv->drm.struct_mutex);
+	i915_vma_unpin_and_release(&dev_priv->perf.oa.noa_wait, 0);
+	mutex_unlock(&dev_priv->drm.struct_mutex);
+
+err_noa_wait_alloc:
+	i915_oa_config_put(stream->oa_config);
 
 err_config:
 	if (stream->ctx)
@@ -3766,6 +4010,9 @@ void i915_perf_init(struct drm_i915_private *dev_priv)
 
 		mutex_init(&dev_priv->perf.metrics_lock);
 		idr_init(&dev_priv->perf.metrics_idr);
+
+		atomic64_set(&dev_priv->perf.oa.noa_programming_delay,
+			     1 * 1000 * 1000 /* 1ms */);
 
 		dev_priv->perf.initialized = true;
 	}

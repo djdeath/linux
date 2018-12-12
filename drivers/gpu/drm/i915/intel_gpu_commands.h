@@ -146,6 +146,7 @@
 #define   MI_BATCH_GTT		    (2<<6) /* aliased with (1<<7) on gen4 */
 #define MI_BATCH_BUFFER_START_GEN8	MI_INSTR(0x31, 1)
 #define   MI_BATCH_RESOURCE_STREAMER (1<<10)
+#define   MI_BATCH_PREDICATE         (1 << 15) /* HSW+ on RCS only*/
 
 /*
  * 3D instructions used by the kernel
@@ -270,5 +271,28 @@
 
 #define COLOR_BLT     ((0x2<<29)|(0x40<<22))
 #define SRC_COPY_BLT  ((0x2<<29)|(0x43<<22))
+
+#define MI_MATH(x) MI_INSTR(0x1a, (x)-1)
+#define   MI_ALU_OP(op, src1, src2) (((op) << 20) | ((src1) << 10) | (src2))
+/* operands */
+#define   MI_ALU_OP_NOOP     0
+#define   MI_ALU_OP_LOAD     128
+#define   MI_ALU_OP_LOADINV  1152
+#define   MI_ALU_OP_LOAD0    129
+#define   MI_ALU_OP_LOAD1    1153
+#define   MI_ALU_OP_ADD      256
+#define   MI_ALU_OP_SUB      257
+#define   MI_ALU_OP_AND      258
+#define   MI_ALU_OP_OR       259
+#define   MI_ALU_OP_XOR      260
+#define   MI_ALU_OP_STORE    384
+#define   MI_ALU_OP_STOREINV 1408
+/* sources */
+#define   MI_ALU_SRC_REG(x)  (x) /* 0 -> 15 */
+#define   MI_ALU_SRC_SRCA    32
+#define   MI_ALU_SRC_SRCB    33
+#define   MI_ALU_SRC_ACCU    49
+#define   MI_ALU_SRC_ZF      50
+#define   MI_ALU_SRC_CF      51
 
 #endif /* _INTEL_GPU_COMMANDS_H_ */
