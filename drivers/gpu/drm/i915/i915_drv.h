@@ -46,6 +46,7 @@
 #include <linux/reservation.h>
 #include <linux/shmem_fs.h>
 #include <linux/stackdepot.h>
+#include <linux/timecounter.h>
 
 #include <drm/intel-gtt.h>
 #include <drm/drm_legacy.h> /* for struct drm_dma_handle */
@@ -1405,6 +1406,14 @@ struct i915_perf_stream {
 	 * interrupts.
 	 */
 	bool oa_interrupt_monitor;
+
+	/**
+	 * System time correlation variables.
+	 */
+	struct cyclecounter cc;
+	spinlock_t systime_lock;
+	struct timespec64 start_systime;
+	struct timecounter tc;
 };
 
 /**
