@@ -1710,6 +1710,27 @@ struct drm_i915_perf_open_param {
 #define I915_PERF_IOCTL_DISABLE	_IO('i', 0x1)
 
 /**
+ * Actively check the availability of data from a stream.
+ *
+ * A stream data availability can be driven by two types of events :
+ *
+ *   - if enabled, the kernel's hrtimer checking the amount of available data
+ *     in the OA buffer through head/tail registers.
+ *
+ *   - if enabled, the OA unit's interrupt mechanism
+ *
+ * The kernel hrtimer incur a cost of running callback at fixed time
+ * intervals, while the OA interrupt might only happen rarely. In the
+ * situation where the application has disabled the kernel's hrtimer and only
+ * uses the OA interrupt to know about available data, the application can
+ * request an active check of the available OA data through this ioctl. This
+ * will make any data in the OA buffer available with either poll() or read().
+ *
+ * This ioctl is available in perf revision 2.
+ */
+#define I915_PERF_IOCTL_FLUSH_DATA _IO('i', 0x2)
+
+/**
  * Common to all i915 perf records
  */
 struct drm_i915_perf_record_header {

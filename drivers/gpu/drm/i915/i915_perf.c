@@ -2432,6 +2432,20 @@ static void i915_perf_disable_locked(struct i915_perf_stream *stream)
 }
 
 /**
+ * i915_perf_flush_data - handle `I915_PERF_IOCTL_FLUSH_DATA` ioctl
+ * @stream: An enabled i915 perf stream
+ *
+ * The intention is to flush all the data available for reading from the OA
+ * buffer
+ */
+static void i915_perf_flush_data(struct i915_perf_stream *stream)
+{
+	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	dev_priv->perf.oa.pollin = oa_buffer_check(stream->dev_priv, true);
+}
+
+/**
  * i915_perf_ioctl - support ioctl() usage with i915 perf stream FDs
  * @stream: An i915 perf stream
  * @cmd: the ioctl request
@@ -2453,6 +2467,9 @@ static long i915_perf_ioctl_locked(struct i915_perf_stream *stream,
 		return 0;
 	case I915_PERF_IOCTL_DISABLE:
 		i915_perf_disable_locked(stream);
+		return 0;
+	case I915_PERF_IOCTL_FLUSH_DATA:
+		i915_perf_flush_data(stream);
 		return 0;
 	}
 
