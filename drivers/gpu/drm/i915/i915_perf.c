@@ -1389,11 +1389,6 @@ static void gen7_init_oa_buffer(struct drm_i915_private *dev_priv)
 	 * memory...
 	 */
 	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0, OA_BUFFER_SIZE);
-
-	/* Maybe make ->pollin per-stream state if we support multiple
-	 * concurrent streams in the future.
-	 */
-	dev_priv->perf.oa.pollin = false;
 }
 
 static void gen8_init_oa_buffer(struct drm_i915_private *dev_priv)
@@ -1447,12 +1442,6 @@ static void gen8_init_oa_buffer(struct drm_i915_private *dev_priv)
 	 * memory...
 	 */
 	memset(dev_priv->perf.oa.oa_buffer.vaddr, 0, OA_BUFFER_SIZE);
-
-	/*
-	 * Maybe make ->pollin per-stream state if we support multiple
-	 * concurrent streams in the future.
-	 */
-	dev_priv->perf.oa.pollin = false;
 }
 
 static int alloc_oa_buffer(struct drm_i915_private *dev_priv)
@@ -1880,6 +1869,12 @@ static void gen8_oa_enable(struct i915_perf_stream *stream)
 static void i915_oa_stream_enable(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *dev_priv = stream->dev_priv;
+
+	/*
+	 * Maybe make ->pollin per-stream state if we support multiple
+	 * concurrent streams in the future.
+	 */
+	dev_priv->perf.oa.pollin = false;
 
 	dev_priv->perf.oa.ops.oa_enable(stream);
 
