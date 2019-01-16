@@ -636,6 +636,7 @@ static int append_oa_sample(struct i915_perf_stream *stream,
  * Returns: 0 on success, negative error code on failure.
  */
 static int gen8_append_oa_reports(struct i915_perf_stream *stream,
+				  u32 oastatus,
 				  char __user *buf,
 				  size_t count,
 				  size_t *offset)
@@ -681,6 +682,21 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		      head, tail))
 		return -EIO;
 
+	/*
+	 * If there is nothing to read, don't append the status report yet,
+	 * wait until we have some data available.
+	 */
+	if (!OA_TAKEN(tail, head))
+		return 0;
+
+	if (oastatus & GEN8_OASTATUS_REPORT_LOST) {
+		ret = append_oa_status(stream, buf, count, offset,
+				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
+		if (ret)
+			return ret;
+		I915_WRITE(GEN8_OASTATUS,
+			   oastatus & ~GEN8_OASTATUS_REPORT_LOST);
+	}
 
 	for (/* none */;
 	     (taken = OA_TAKEN(tail, head));
@@ -880,16 +896,7 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
 		oastatus = I915_READ(GEN8_OASTATUS);
 	}
 
-	if (oastatus & GEN8_OASTATUS_REPORT_LOST) {
-		ret = append_oa_status(stream, buf, count, offset,
-				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
-		if (ret)
-			return ret;
-		I915_WRITE(GEN8_OASTATUS,
-			   oastatus & ~GEN8_OASTATUS_REPORT_LOST);
-	}
-
-	return gen8_append_oa_reports(stream, buf, count, offset);
+	return gen8_append_oa_reports(stream, oastatus, buf, count, offset);
 }
 
 /**
@@ -913,6 +920,7 @@ static int gen8_oa_read(struct i915_perf_stream *stream,
  * Returns: 0 on success, negative error code on failure.
  */
 static int gen7_append_oa_reports(struct i915_perf_stream *stream,
+				  u32 oastatus1,
 				  char __user *buf,
 				  size_t count,
 				  size_t *offset)
@@ -956,6 +964,21 @@ static int gen7_append_oa_reports(struct i915_perf_stream *stream,
 		      head, tail))
 		return -EIO;
 
+	/*
+	 * If there is nothing to read, don't append the status report yet,
+	 * wait until we have some data available.
+	 */
+	if (!OA_TAKEN(tail, head))
+		return 0;
+
+	if (unlikely(oastatus1 & GEN7_OASTATUS1_REPORT_LOST)) {
+		ret = append_oa_status(stream, buf, count, offset,
+				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
+		if (ret)
+			return ret;
+		dev_priv->perf.oa.gen7_latched_oastatus1 |=
+			GEN7_OASTATUS1_REPORT_LOST;
+	}
 
 	for (/* none */;
 	     (taken = OA_TAKEN(tail, head));
@@ -1089,16 +1112,7 @@ static int gen7_oa_read(struct i915_perf_stream *stream,
 		oastatus1 = I915_READ(GEN7_OASTATUS1);
 	}
 
-	if (unlikely(oastatus1 & GEN7_OASTATUS1_REPORT_LOST)) {
-		ret = append_oa_status(stream, buf, count, offset,
-				       DRM_I915_PERF_RECORD_OA_REPORT_LOST);
-		if (ret)
-			return ret;
-		dev_priv->perf.oa.gen7_latched_oastatus1 |=
-			GEN7_OASTATUS1_REPORT_LOST;
-	}
-
-	return gen7_append_oa_reports(stream, buf, count, offset);
+	return gen7_append_oa_reports(stream, oastatus1, buf, count, offset);
 }
 
 /**
