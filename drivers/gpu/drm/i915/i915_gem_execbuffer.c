@@ -2171,9 +2171,9 @@ await_fence_array(struct i915_execbuffer *eb,
 		if (!(flags & I915_EXEC_FENCE_WAIT))
 			continue;
 
-		fence = drm_syncobj_fence_get(syncobj);
-		if (!fence)
-			return -EINVAL;
+		err = drm_syncobj_fence_get(syncobj, 0, &fence);
+		if (err)
+			return err;
 
 		err = i915_request_await_dma_fence(eb->request, fence);
 		dma_fence_put(fence);
@@ -2200,7 +2200,7 @@ signal_fence_array(struct i915_execbuffer *eb,
 		if (!(flags & I915_EXEC_FENCE_SIGNAL))
 			continue;
 
-		drm_syncobj_replace_fence(syncobj, fence);
+		drm_syncobj_replace_fence(syncobj, 0, fence);
 	}
 }
 

@@ -718,6 +718,7 @@ struct drm_prime_handle {
 struct drm_syncobj_create {
 	__u32 handle;
 #define DRM_SYNCOBJ_CREATE_SIGNALED (1 << 0)
+#define DRM_SYNCOBJ_CREATE_TIMELINE (1 << 1)
 	__u32 flags;
 };
 
@@ -736,8 +737,29 @@ struct drm_syncobj_handle {
 	__u32 pad;
 };
 
+/* Same flags as drm_syncobj_handle apply. */
+struct drm_syncobj_handle2 {
+	__u32 handle;
+	__u32 flags;
+
+	__s32 fd;
+	__u32 pad;
+
+	__u64 value;
+};
+
+struct drm_syncobj_item {
+	__u32 handle;
+	__u32 pad;
+	__u64 value;
+};
+
 #define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL (1 << 0)
 #define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT (1 << 1)
+/* When this flag is set, handles is a pointer to an array of struct
+ * drm_syncobj_item.
+ */
+#define DRM_SYNCOBJ_WAIT_FLAGS_ITEMS (1 << 2)
 struct drm_syncobj_wait {
 	__u64 handles;
 	/* absolute timeout */
@@ -748,10 +770,14 @@ struct drm_syncobj_wait {
 	__u32 pad;
 };
 
+/* When this flag is set, handles is a pointer to an array of struct
+ * drm_syncobj_item.
+ */
+#define DRM_SYNCOBJ_ARRAY_FLAGS_ITEMS (1 << 0)
 struct drm_syncobj_array {
 	__u64 handles;
 	__u32 count_handles;
-	__u32 pad;
+	__u32 flags;
 };
 
 /* Query current scanout sequence number */
@@ -909,6 +935,10 @@ extern "C" {
 #define DRM_IOCTL_MODE_LIST_LESSEES	DRM_IOWR(0xC7, struct drm_mode_list_lessees)
 #define DRM_IOCTL_MODE_GET_LEASE	DRM_IOWR(0xC8, struct drm_mode_get_lease)
 #define DRM_IOCTL_MODE_REVOKE_LEASE	DRM_IOWR(0xC9, struct drm_mode_revoke_lease)
+
+#define DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD2	DRM_IOWR(0xCA, struct drm_syncobj_handle2)
+#define DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE2	DRM_IOWR(0xCB, struct drm_syncobj_handle2)
+#define DRM_IOCTL_SYNCOBJ_READ_TIMELINE	DRM_IOWR(0xCC, struct drm_syncobj_array)
 
 /**
  * Device specific ioctls should only be in their respective headers

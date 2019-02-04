@@ -29,11 +29,55 @@
 #include <linux/dma-fence.h>
 
 struct drm_file;
+struct drm_syncobj;
+
+/**
+ * struct drm_syncobj_point - sync object point.
+ *
+ * This structure defines a generic sync object which wraps a &dma_fence. A
+ * binary syncobj contains a single @drm_syncobj_point, while a timeline
+ * syncobj will contain multiple.
+ */
+struct drm_syncobj_point {
+	/**
+	 * @syncobj: A reference back to the syncobj containing this point.
+	 */
+	struct drm_syncobj *syncobj;
+	/**
+	 * @fence: A fence associated with this syncobj point. This fence is
+	 * never signaled by the syncobj.
+	 */
+	struct dma_fence *fence;
+	/**
+	 * @fence_cb: A callback to be called when &fence is signaled.
+	 */
+	struct dma_fence_cb fence_cb;
+	/**
+	 * @link: linked list node in the list of points.
+	 */
+	struct list_head node;
+	/**
+	 * @value: Value of this point
+	 */
+	u64 value;
+	/**
+	 * @cb_list: List of callbacks to call when &fence gets replaced.
+	 */
+	struct list_head cb_list;
+};
 
 /**
  * struct drm_syncobj - sync object.
  *
- * This structure defines a generic sync object which wraps a &dma_fence.
+ * This structure defines a generic sync object which wraps 2 types of sync
+ * objects :
+ *
+ *   - binary: a syncobj that can be either signaled on unsignaled.
+ *
+ *   - timeline: a syncobj associated with a &u64 payload, that can be waited
+ *     on at a particular value of the payload. Waiters are signaled in the
+ *     order of the payload value.
+ *
  */
 struct drm_syncobj {
 	/**
@@ -41,25 +85,66 @@ struct drm_syncobj {
 	 */
 	struct kref refcount;
 	/**
-	 * @fence:
-	 * NULL or a pointer to the fence bound to this object.
-	 *
-	 * This field should not be used directly. Use drm_syncobj_fence_get()
-	 * and drm_syncobj_replace_fence() instead.
+	 * @type: Type of sync object.
 	 */
-	struct dma_fence __rcu *fence;
+	enum {
+		DRM_SYNCOBJ_TYPE_BINARY,
+		DRM_SYNCOBJ_TYPE_TIMELINE,
+	} type;
+	union {
+		/**
+		 * @binary: A container of the fields associated with a binary
+		 * syncobj.
+		 */
+		struct drm_syncobj_point binary;
+		/**
+		 * @timeline: A container of the fields associated with a
+		 * timeline syncobj.
+		 */
+		struct {
+			/**
+			 * @points: List of &drm_syncobj_point not yet
+			 * signaled.
+			 */
+			struct list_head points;
+			/**
+			 * @value: Current value of the timeline.
+			 */
+			u64 value;
+			/**
+			 * @context: Context of the fences allocated with this
+			 * syncobj.
+			 */
+			u64 context;
+		} timeline;
+	};
 	/**
-	 * @cb_list: List of callbacks to call when the &fence gets replaced.
-	 */
-	struct list_head cb_list;
-	/**
-	 * @lock: Protects &cb_list and write-locks &fence.
+	 * @lock: Protects &binary and &timeline.
 	 */
 	spinlock_t lock;
 	/**
 	 * @file: A file backing for this syncobj.
 	 */
 	struct file *file;
+};
+
+/**
+ * struct drm_syncobj_array_item - sync object reference at a particular point
+ *
+ * This structure is used a container to describe a reference to a syncobj at
+ * a particular point. An array of this structure is used to either give a
+ * list of syncobj to wait or signal at a specific point.
+ */
+struct drm_syncobj_array_item {
+	/**
+	 * @syncobj: A syncobj, this pointer has a reference on the @syncobj
+	 * and must be properly release using drm_syncobj_array_free().
+	 */
+	struct drm_syncobj *syncobj;
+	/**
+	 * @value: A value to signal or wait on.
+	 */
+	u64 value;
 };
 
 void drm_syncobj_free(struct kref *kref);
@@ -88,40 +173,42 @@ drm_syncobj_put(struct drm_syncobj *obj)
 }
 
 /**
- * drm_syncobj_fence_get - get a reference to a fence in a sync object
- * @syncobj: sync object.
+ * drm_syncobj_point_valid - verify whether a point is valid for a given
+ * syncobj
  *
- * This acquires additional reference to &drm_syncobj.fence contained in @obj,
- * if not NULL. It is illegal to call this without already holding a reference.
- * No locks required.
+ * @obj: sync object.
+ * @point: timeline point
  *
- * Returns:
- * Either the fence of @obj or NULL if there's none.
+ * This is a useful utility function for userspace input validation.
  */
-static inline struct dma_fence *
-drm_syncobj_fence_get(struct drm_syncobj *syncobj)
+static inline bool
+drm_syncobj_point_valid(struct drm_syncobj *obj, u64 point)
 {
-	struct dma_fence *fence;
-
-	rcu_read_lock();
-	fence = dma_fence_get_rcu_safe(&syncobj->fence);
-	rcu_read_unlock();
-
-	return fence;
+	if (obj->type == DRM_SYNCOBJ_TYPE_BINARY)
+		return point == 0;
+	else
+		return point != 0;
 }
 
 struct drm_syncobj *drm_syncobj_find(struct drm_file *file_private,
 				     u32 handle);
-void drm_syncobj_replace_fence(struct drm_syncobj *syncobj,
-			       struct dma_fence *fence);
+int drm_syncobj_replace_fence(struct drm_syncobj *syncobj, u64 point,
+			      struct dma_fence *fence);
 int drm_syncobj_find_fence(struct drm_file *file_private,
 			   u32 handle, u64 point, u64 flags,
 			   struct dma_fence **fence);
+int drm_syncobj_fence_get(struct drm_syncobj *syncobj, u64 point,
+			  struct dma_fence **fence);
 void drm_syncobj_free(struct kref *kref);
 int drm_syncobj_create(struct drm_syncobj **out_syncobj, uint32_t flags,
 		       struct dma_fence *fence);
 int drm_syncobj_get_handle(struct drm_file *file_private,
 			   struct drm_syncobj *syncobj, u32 *handle);
 int drm_syncobj_get_fd(struct drm_syncobj *syncobj, int *p_fd);
+
+struct drm_syncobj_array_item *
+drm_syncobj_array_from_user(struct drm_file *file_private, bool use_items,
+			    void __user *data, u32 count);
+void drm_syncobj_array_free(struct drm_syncobj_array_item *array, u32 count_items);
 
 #endif
