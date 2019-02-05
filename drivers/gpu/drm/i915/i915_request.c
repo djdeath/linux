@@ -526,6 +526,19 @@ out:
 	return kmem_cache_alloc(ce->gem_context->i915->requests, GFP_KERNEL);
 }
 
+static int add_barrier(struct i915_request *rq, struct i915_gem_active *active)
+{
+	struct i915_request *barrier =
+		i915_gem_active_raw(active, &rq->i915->drm.struct_mutex);
+
+	return barrier ? i915_request_await_dma_fence(rq, &barrier->fence) : 0;
+}
+
+static int add_timeline_barrier(struct i915_request *rq)
+{
+	return add_barrier(rq, &rq->timeline->barrier);
+}
+
 /**
  * i915_request_alloc - allocate a request structure
  *
@@ -667,6 +680,10 @@ i915_request_alloc(struct intel_engine_cs *engine, struct i915_gem_context *ctx)
 	 * position of the head.
 	 */
 	rq->head = rq->ring->emit;
+
+	ret = add_timeline_barrier(rq);
+	if (ret)
+		goto err_unwind;
 
 	ret = engine->request_alloc(rq);
 	if (ret)
@@ -968,7 +985,7 @@ void i915_request_add(struct i915_request *request)
 		 * Allow interactive/synchronous clients to jump ahead of
 		 * the bulk clients. (FQ_CODEL)
 		 */
-		if (!prev || i915_request_completed(prev))
+		if (list_empty(&request->sched.signalers_list))
 			attr.priority |= I915_PRIORITY_NEWCLIENT;
 
 		engine->schedule(request, &attr);
