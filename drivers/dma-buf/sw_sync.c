@@ -325,6 +325,9 @@ static int sw_sync_debugfs_release(struct inode *inode, struct file *file)
 	spin_lock_irq(&obj->lock);
 
 	list_for_each_entry_safe(pt, next, &obj->pt_list, link) {
+		list_del_init(&pt->link);
+		rb_erase(&pt->node, &obj->pt_tree);
+
 		dma_fence_set_error(&pt->base, -ENOENT);
 		dma_fence_signal_locked(&pt->base);
 	}
