@@ -448,7 +448,7 @@ static int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		value = INTEL_INFO(dev_priv)->has_coherent_ggtt;
 		break;
 	case I915_PARAM_PERF_REVISION:
-		value = 1;
+		value = 2;
 		break;
 	default:
 		DRM_DEBUG("Unknown parameter %d\n", param->param);
