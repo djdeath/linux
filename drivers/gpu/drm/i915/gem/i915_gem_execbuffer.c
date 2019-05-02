@@ -56,13 +56,13 @@ enum {
 	 I915_EXEC_RESOURCE_STREAMER)
 
 /* Catch emission of unexpected errors for CI! */
-#if IS_ENABLED(CONFIG_DRM_I915_DEBUG_GEM)
+/* #if IS_ENABLED(CONFIG_DRM_I915_DEBUG_GEM) */
 #undef EINVAL
 #define EINVAL ({ \
-	DRM_DEBUG_DRIVER("EINVAL at %s:%d\n", __func__, __LINE__); \
+	DRM_ERROR("EINVAL at %s:%d\n", __func__, __LINE__); \
 	22; \
 })
-#endif
+/* #endif */
 
 /**
  * DOC: User command execution
@@ -2414,7 +2414,7 @@ get_timeline_fence_array(struct i915_execbuffer *eb, int *out_n_fences)
 
 		syncobj = drm_syncobj_find(eb->file, user_fence.handle);
 		if (!syncobj) {
-			DRM_DEBUG("Invalid syncobj handle provided\n");
+			DRM_ERROR("Invalid syncobj handle provided\n");
 			err = -ENOENT;
 			goto err;
 		}
@@ -2422,7 +2422,7 @@ get_timeline_fence_array(struct i915_execbuffer *eb, int *out_n_fences)
 		if (user_fence.flags & I915_EXEC_FENCE_WAIT) {
 			fence = drm_syncobj_fence_get(syncobj);
 			if (!fence) {
-				DRM_DEBUG("Syncobj handle has no fence\n");
+				DRM_ERROR("Syncobj handle has no fence\n");
 				drm_syncobj_put(syncobj);
 				err = -EINVAL;
 				goto err;
@@ -2430,7 +2430,7 @@ get_timeline_fence_array(struct i915_execbuffer *eb, int *out_n_fences)
 
 			err = dma_fence_chain_find_seqno(&fence, point);
 			if (err) {
-				DRM_DEBUG("Syncobj handle missing requested point %llu\n", point);
+				DRM_ERROR("Syncobj handle missing requested point %llu\n", point);
 				drm_syncobj_put(syncobj);
 				goto err;
 			}
@@ -2467,7 +2467,7 @@ get_timeline_fence_array(struct i915_execbuffer *eb, int *out_n_fences)
 			if (!fences[num_fences].chain_fence) {
 				drm_syncobj_put(syncobj);
 				err = -ENOMEM;
-				DRM_DEBUG("Unable to alloc chain_fence\n");
+				DRM_ERROR("Unable to alloc chain_fence\n");
 				goto err;
 			}
 		} else {
@@ -2535,7 +2535,7 @@ get_legacy_fence_array(struct i915_execbuffer *eb,
 
 		syncobj = drm_syncobj_find(eb->file, user_fence.handle);
 		if (!syncobj) {
-			DRM_DEBUG("Invalid syncobj handle provided\n");
+			DRM_ERROR("Invalid syncobj handle provided\n");
 			err = -ENOENT;
 			goto err;
 		}
@@ -2543,7 +2543,7 @@ get_legacy_fence_array(struct i915_execbuffer *eb,
 		if (user_fence.flags & I915_EXEC_FENCE_WAIT) {
 			fence = drm_syncobj_fence_get(syncobj);
 			if (!fence) {
-				DRM_DEBUG("Syncobj handle has no fence\n");
+				DRM_ERROR("Syncobj handle has no fence\n");
 				drm_syncobj_put(syncobj);
 				err = -EINVAL;
 				goto err;
