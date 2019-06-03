@@ -26,6 +26,7 @@
 #include "i915_gem_context.h"
 #include "i915_gem_ioctls.h"
 #include "i915_trace.h"
+#include "i915_user_extensions.h"
 
 enum {
 	FORCE_CPU_RELOC = 1,
@@ -272,6 +273,10 @@ struct i915_execbuffer {
 	 */
 	int lut_size;
 	struct hlist_head *buckets; /** ht for relocation handles */
+
+	struct {
+		u64 flags; /** Available extensions parameters */
+	} extensions;
 };
 
 #define exec_entry(EB, VMA) (&(EB)->exec[(VMA)->exec_flags - (EB)->flags])
@@ -1921,7 +1926,8 @@ static bool i915_gem_check_execbuffer(struct drm_i915_gem_execbuffer2 *exec)
 		return false;
 
 	/* Kernel clipping was a DRI1 misfeature */
-	if (!(exec->flags & I915_EXEC_FENCE_ARRAY)) {
+	if (!(exec->flags & (I915_EXEC_FENCE_ARRAY |
+			     I915_EXEC_USE_EXTENSIONS))) {
 		if (exec->num_cliprects || exec->cliprects_ptr)
 			return false;
 	}
@@ -2460,6 +2466,33 @@ signal_fence_array(struct i915_execbuffer *eb,
 	}
 }
 
+static const i915_user_extension_fn execbuf_extensions[] = {
+};
+
+static int
+parse_execbuf2_extensions(struct drm_i915_gem_execbuffer2 *args,
+			  struct i915_execbuffer *eb)
+{
+	eb->extensions.flags = 0;
+
+	if (!(args->flags & I915_EXEC_USE_EXTENSIONS))
+		return 0;
+
+	/* The execbuf2 extension mechanism reuses cliprects_ptr. So we cannot
+	 * have another flag also using it at the same time.
+	 */
+	if (eb->args->flags & I915_EXEC_FENCE_ARRAY)
+		return -EINVAL;
+
+	if (args->num_cliprects != 0)
+		return -EINVAL;
+
+	return i915_user_extensions(u64_to_user_ptr(args->cliprects_ptr),
+				    execbuf_extensions,
+				    ARRAY_SIZE(execbuf_extensions),
+				    eb);
+}
+
 static int
 i915_gem_do_execbuffer(struct drm_device *dev,
 		       struct drm_file *file,
@@ -2513,6 +2546,10 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	}
 	if (args->flags & I915_EXEC_IS_PINNED)
 		eb.batch_flags |= I915_DISPATCH_PINNED;
+
+	err = parse_execbuf2_extensions(args, &eb);
+	if (err)
+		return err;
 
 	if (args->flags & I915_EXEC_FENCE_IN) {
 		in_fence = sync_file_get_fence(lower_32_bits(args->rsvd2));
