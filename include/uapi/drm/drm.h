@@ -786,6 +786,22 @@ struct drm_syncobj_timeline_array {
 	__u32 flags;
 };
 
+struct drm_syncobj_binary_array {
+	/* A pointer to an array of u32 syncobj handles. */
+	__u64 handles;
+	/* A pointer to an array of u32 access flags for each handle. */
+	__u64 access_flags;
+	/* The binary value of a syncobj is read before it is incremented. */
+#define DRM_SYNCOBJ_BINARY_VALUE_READ (1u << 0)
+#define DRM_SYNCOBJ_BINARY_VALUE_INC  (1u << 1)
+	/* A pointer to an array of u64 values written to by the kernel if the
+	 * handle is flagged for reading.
+	 */
+	__u64 values;
+	/* The length of the 3 arrays above. */
+	__u32 count_handles;
+	__u32 pad;
+};
 
 /* Query current scanout sequence number */
 struct drm_crtc_get_sequence {
@@ -947,6 +963,7 @@ extern "C" {
 #define DRM_IOCTL_SYNCOBJ_QUERY		DRM_IOWR(0xCB, struct drm_syncobj_timeline_array)
 #define DRM_IOCTL_SYNCOBJ_TRANSFER	DRM_IOWR(0xCC, struct drm_syncobj_transfer)
 #define DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL	DRM_IOWR(0xCD, struct drm_syncobj_timeline_array)
+#define DRM_IOCTL_SYNCOBJ_BINARY	DRM_IOWR(0xCE, struct drm_syncobj_binary_array)
 
 /**
  * Device specific ioctls should only be in their respective headers
