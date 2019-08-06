@@ -1225,8 +1225,10 @@ drm_syncobj_reset_ioctl(struct drm_device *dev, void *data,
 	if (ret < 0)
 		return ret;
 
-	for (i = 0; i < args->count_handles; i++)
+	for (i = 0; i < args->count_handles; i++) {
 		drm_syncobj_replace_fence(syncobjs[i], NULL);
+		atomic64_set(&syncobjs[i]->binary_payload, 0);
+	}
 
 	drm_syncobj_array_free(syncobjs, args->count_handles);
 
@@ -1403,6 +1405,61 @@ int drm_syncobj_query_ioctl(struct drm_device *dev, void *data,
 		if (ret)
 			break;
 	}
+
+	drm_syncobj_array_free(syncobjs, args->count_handles);
+
+	return ret;
+}
+
+int drm_syncobj_binary_ioctl(struct drm_device *dev, void *data,
+			     struct drm_file *file_private)
+{
+	struct drm_syncobj_binary_array *args = data;
+	struct drm_syncobj **syncobjs;
+	u32 __user *access_flags = u64_to_user_ptr(args->access_flags);
+	u64 __user *values = u64_to_user_ptr(args->values);
+	u32 i;
+	int ret;
+
+	if (!drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE))
+		return -EOPNOTSUPP;
+
+	if (args->pad != 0)
+		return -EINVAL;
+
+	if (args->count_handles == 0)
+		return -EINVAL;
+
+	ret = drm_syncobj_array_find(file_private,
+				     u64_to_user_ptr(args->handles),
+				     args->count_handles,
+				     &syncobjs);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < args->count_handles; i++) {
+		u32 flags;
+		u64 value;
+
+		if (get_user(flags, &access_flags[i])) {
+			ret = -EFAULT;
+			break;
+		}
+
+		if (flags & DRM_SYNCOBJ_BINARY_VALUE_INC)
+			value = atomic64_inc_return(&syncobjs[i]->binary_payload) - 1;
+		else if (flags & DRM_SYNCOBJ_BINARY_VALUE_READ)
+			value = atomic64_read(&syncobjs[i]->binary_payload);
+
+		if (flags & DRM_SYNCOBJ_BINARY_VALUE_READ) {
+			if (put_user(value, &values[i])) {
+				ret = -EFAULT;
+				break;
+			}
+		}
+
+	}
+
 	drm_syncobj_array_free(syncobjs, args->count_handles);
 
 	return ret;
