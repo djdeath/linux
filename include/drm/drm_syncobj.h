@@ -61,6 +61,15 @@ struct drm_syncobj {
 	 * @file: A file backing for this syncobj.
 	 */
 	struct file *file;
+	/**
+	 * @binary_payload: A 64bit payload for binary syncobjs.
+	 *
+	 * We use the payload value to wait on binary syncobj fences to
+	 * materialize. It is a reservation mechanism for the signaler to
+	 * express that at some point in the future a dma fence with the same
+	 * seqno will be put into the syncobj.
+	 */
+	atomic64_t binary_payload;
 };
 
 void drm_syncobj_free(struct kref *kref);
