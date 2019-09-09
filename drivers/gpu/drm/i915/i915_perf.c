@@ -369,52 +369,176 @@ struct perf_open_properties {
 	struct intel_engine_cs *engine;
 };
 
+struct i915_oa_config_bo {
+	struct llist_node node;
+
+	struct i915_oa_config *oa_config;
+	struct i915_vma *vma;
+};
+
 static enum hrtimer_restart oa_poll_check_timer_cb(struct hrtimer *hrtimer);
 
-static void free_oa_config(struct i915_oa_config *oa_config)
+void i915_oa_config_release(struct kref *ref)
 {
+	struct i915_oa_config *oa_config =
+		container_of(ref, typeof(*oa_config), ref);
+
 	if (!PTR_ERR(oa_config->flex_regs))
 		kfree(oa_config->flex_regs);
 	if (!PTR_ERR(oa_config->b_counter_regs))
 		kfree(oa_config->b_counter_regs);
 	if (!PTR_ERR(oa_config->mux_regs))
 		kfree(oa_config->mux_regs);
-	kfree(oa_config);
+
+	kfree_rcu(oa_config, rcu);
 }
 
-static void put_oa_config(struct i915_oa_config *oa_config)
+struct i915_oa_config *
+i915_perf_get_oa_config(struct i915_perf *perf, int metrics_set)
 {
-	if (!atomic_dec_and_test(&oa_config->ref_count))
-		return;
+	struct i915_oa_config *oa_config;
 
-	free_oa_config(oa_config);
+	rcu_read_lock();
+	if (metrics_set == 1)
+		oa_config = &perf->test_config;
+	else
+		oa_config = idr_find(&perf->metrics_idr, metrics_set);
+	if (oa_config)
+		oa_config = i915_oa_config_get(oa_config);
+	rcu_read_unlock();
+
+	return oa_config;
 }
 
-static int get_oa_config(struct i915_perf *perf,
-			 int metrics_set,
-			 struct i915_oa_config **out_config)
+static u32 *write_cs_mi_lri(u32 *cs,
+			    const struct i915_oa_reg *reg_data,
+			    u32 n_regs)
 {
-	int ret;
+	u32 i;
 
-	if (metrics_set == 1) {
-		*out_config = &perf->test_config;
-		atomic_inc(&perf->test_config.ref_count);
-		return 0;
+	for (i = 0; i < n_regs; i++) {
+		if ((i % MI_LOAD_REGISTER_IMM_MAX_REGS) == 0) {
+			u32 n_lri = min_t(u32,
+					  n_regs - i,
+					  MI_LOAD_REGISTER_IMM_MAX_REGS);
+
+			*cs++ = MI_LOAD_REGISTER_IMM(n_lri);
+		}
+		*cs++ = i915_mmio_reg_offset(reg_data[i].addr);
+		*cs++ = reg_data[i].value;
 	}
 
-	ret = mutex_lock_interruptible(&perf->metrics_lock);
-	if (ret)
-		return ret;
+	return cs;
+}
 
-	*out_config = idr_find(&perf->metrics_idr, metrics_set);
-	if (!*out_config)
-		ret = -EINVAL;
-	else
-		atomic_inc(&(*out_config)->ref_count);
+static int num_lri_dwords(int num_regs)
+{
+	int count = 0;
 
-	mutex_unlock(&perf->metrics_lock);
+	if (num_regs > 0) {
+		count += DIV_ROUND_UP(num_regs, MI_LOAD_REGISTER_IMM_MAX_REGS);
+		count += num_regs * 2;
+	}
 
-	return ret;
+	return count;
+}
+
+static struct i915_oa_config_bo *
+alloc_oa_config_buffer(struct i915_perf_stream *stream,
+		       struct i915_oa_config *oa_config)
+{
+	struct drm_i915_gem_object *obj;
+	struct i915_oa_config_bo *oa_bo;
+	size_t config_length = 0;
+	u32 *cs;
+	int err;
+
+	oa_bo = kzalloc(sizeof(*oa_bo), GFP_KERNEL);
+	if (!oa_bo)
+		return ERR_PTR(-ENOMEM);
+
+	config_length += num_lri_dwords(oa_config->mux_regs_len);
+	config_length += num_lri_dwords(oa_config->b_counter_regs_len);
+	config_length += num_lri_dwords(oa_config->flex_regs_len);
+	config_length++; /* MI_BATCH_BUFFER_END */
+	config_length = ALIGN(sizeof(u32) * config_length, I915_GTT_PAGE_SIZE);
+
+	obj = i915_gem_object_create_shmem(stream->perf->i915, config_length);
+	if (IS_ERR(obj)) {
+		err = PTR_ERR(obj);
+		goto err_free;
+	}
+
+	cs = i915_gem_object_pin_map(obj, I915_MAP_WB);
+	if (IS_ERR(cs)) {
+		err = PTR_ERR(cs);
+		goto err_oa_bo;
+	}
+
+	cs = write_cs_mi_lri(cs,
+			     oa_config->mux_regs,
+			     oa_config->mux_regs_len);
+	cs = write_cs_mi_lri(cs,
+			     oa_config->b_counter_regs,
+			     oa_config->b_counter_regs_len);
+	cs = write_cs_mi_lri(cs,
+			     oa_config->flex_regs,
+			     oa_config->flex_regs_len);
+
+	*cs++ = MI_BATCH_BUFFER_END;
+
+	i915_gem_object_flush_map(obj);
+	i915_gem_object_unpin_map(obj);
+
+	oa_bo->vma = i915_vma_instance(obj, &stream->gt->ggtt->vm, NULL);
+	if (IS_ERR(oa_bo->vma)) {
+		err = PTR_ERR(oa_bo->vma);
+		goto err_oa_bo;
+	}
+
+	oa_bo->oa_config = i915_oa_config_get(oa_config);
+	llist_add(&oa_bo->node, &stream->oa_config_bos);
+
+	return oa_bo;
+
+err_oa_bo:
+	i915_gem_object_put(obj);
+err_free:
+	kfree(oa_bo);
+	return ERR_PTR(err);
+}
+
+static void free_oa_config_bo(struct i915_oa_config_bo *oa_bo)
+{
+	i915_oa_config_put(oa_bo->oa_config);
+	i915_vma_put(oa_bo->vma);
+	kfree(oa_bo);
+}
+
+struct i915_vma *
+i915_perf_stream_get_oa_vma(struct i915_perf_stream *stream,
+			    struct i915_oa_config *oa_config)
+{
+	struct i915_oa_config_bo *oa_bo;
+
+	/*
+	 * Look for the buffer in the already allocated BOs attached
+	 * to the stream.
+	 */
+	llist_for_each_entry(oa_bo, stream->oa_config_bos.first, node) {
+		if (oa_bo->oa_config == oa_config &&
+		    memcmp(oa_bo->oa_config->uuid,
+			   oa_config->uuid,
+			   sizeof(oa_config->uuid)) == 0)
+			goto out;
+	}
+
+	oa_bo = alloc_oa_config_buffer(stream, oa_config);
+	if (IS_ERR(oa_bo))
+		return ERR_CAST(oa_bo);
+
+out:
+	return i915_vma_get(oa_bo->vma);
 }
 
 static u32 gen8_oa_hw_tail_read(struct i915_perf_stream *stream)
@@ -1337,6 +1461,16 @@ free_oa_buffer(struct i915_perf_stream *stream)
 	stream->oa_buffer.vaddr = NULL;
 }
 
+static void
+free_oa_configs(struct i915_perf_stream *stream)
+{
+	struct i915_oa_config_bo *oa_bo, *tmp;
+
+	i915_oa_config_put(stream->oa_config);
+	llist_for_each_entry_safe(oa_bo, tmp, stream->oa_config_bos.first, node)
+		free_oa_config_bo(oa_bo);
+}
+
 static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 {
 	struct i915_perf *perf = stream->perf;
@@ -1358,7 +1492,7 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	if (stream->ctx)
 		oa_put_render_ctx_id(stream);
 
-	put_oa_config(stream->oa_config);
+	free_oa_configs(stream);
 
 	if (perf->spurious_report_rs.missed) {
 		DRM_NOTE("%d spurious OA report notices suppressed due to ratelimiting\n",
@@ -1504,10 +1638,6 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream)
 		ret = PTR_ERR(stream->oa_buffer.vaddr);
 		goto err_unpin;
 	}
-
-	DRM_DEBUG_DRIVER("OA Buffer initialized, gtt offset = 0x%x, vaddr = %p\n",
-			 i915_ggtt_offset(stream->oa_buffer.vma),
-			 stream->oa_buffer.vaddr);
 
 	return 0;
 
@@ -2199,9 +2329,10 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		}
 	}
 
-	ret = get_oa_config(perf, props->metrics_set, &stream->oa_config);
-	if (ret) {
+	stream->oa_config = i915_perf_get_oa_config(perf, props->metrics_set);
+	if (!stream->oa_config) {
 		DRM_DEBUG("Invalid OA config id=%i\n", props->metrics_set);
+		ret = -EINVAL;
 		goto err_config;
 	}
 
@@ -2234,6 +2365,9 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		goto err_enable;
 	}
 
+	DRM_DEBUG("opening stream oa config uuid=%s\n",
+		  stream->oa_config->uuid);
+
 	hrtimer_init(&stream->poll_check_timer,
 		     CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	stream->poll_check_timer.function = oa_poll_check_timer_cb;
@@ -2249,10 +2383,10 @@ err_enable:
 	free_oa_buffer(stream);
 
 err_oa_buf_alloc:
-	put_oa_config(stream->oa_config);
-
 	intel_uncore_forcewake_put(stream->gt->uncore, FORCEWAKE_ALL);
 	intel_runtime_pm_put(stream->gt->uncore->rpm, stream->wakeref);
+
+	free_oa_configs(stream);
 
 err_config:
 	if (stream->ctx)
@@ -2774,6 +2908,15 @@ err:
 	return ret;
 }
 
+struct i915_perf_stream *
+i915_perf_file_get_stream(struct file *file)
+{
+	if (file->f_op != &fops)
+		return NULL;
+
+	return file->private_data;
+}
+
 static u64 oa_exponent_to_ns(struct i915_perf *perf, int exponent)
 {
 	return div64_u64(1000000000ULL * (2ULL << exponent),
@@ -3058,7 +3201,8 @@ void i915_perf_register(struct drm_i915_private *i915)
 	if (ret)
 		goto sysfs_error;
 
-	atomic_set(&perf->test_config.ref_count, 1);
+	perf->test_config.perf = perf;
+	kref_init(&perf->test_config.ref);
 
 	goto exit;
 
@@ -3316,7 +3460,8 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 	}
 
-	atomic_set(&oa_config->ref_count, 1);
+	oa_config->perf = perf;
+	kref_init(&oa_config->ref);
 
 	if (!uuid_is_valid(args->uuid)) {
 		DRM_DEBUG("Invalid uuid format for OA config\n");
@@ -3415,7 +3560,7 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 sysfs_err:
 	mutex_unlock(&perf->metrics_lock);
 reg_err:
-	put_oa_config(oa_config);
+	i915_oa_config_put(oa_config);
 	DRM_DEBUG("Failed to add new OA config\n");
 	return err;
 }
@@ -3451,13 +3596,13 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 
 	ret = mutex_lock_interruptible(&perf->metrics_lock);
 	if (ret)
-		goto lock_err;
+		return ret;
 
 	oa_config = idr_find(&perf->metrics_idr, *arg);
 	if (!oa_config) {
 		DRM_DEBUG("Failed to remove unknown OA config\n");
 		ret = -ENOENT;
-		goto config_err;
+		goto err_unlock;
 	}
 
 	GEM_BUG_ON(*arg != oa_config->id);
@@ -3467,13 +3612,16 @@ int i915_perf_remove_config_ioctl(struct drm_device *dev, void *data,
 
 	idr_remove(&perf->metrics_idr, *arg);
 
+	mutex_unlock(&perf->metrics_lock);
+
 	DRM_DEBUG("Removed config %s id=%i\n", oa_config->uuid, oa_config->id);
 
-	put_oa_config(oa_config);
+	i915_oa_config_put(oa_config);
 
-config_err:
+	return 0;
+
+err_unlock:
 	mutex_unlock(&perf->metrics_lock);
-lock_err:
 	return ret;
 }
 
@@ -3643,7 +3791,7 @@ void i915_perf_init(struct drm_i915_private *i915)
 
 static int destroy_config(int id, void *p, void *data)
 {
-	put_oa_config(p);
+	i915_oa_config_put(p);
 	return 0;
 }
 
@@ -3654,9 +3802,6 @@ static int destroy_config(int id, void *p, void *data)
 void i915_perf_fini(struct drm_i915_private *i915)
 {
 	struct i915_perf *perf = &i915->perf;
-
-	if (!perf->i915)
-		return;
 
 	idr_for_each(&perf->metrics_idr, destroy_config, perf);
 	idr_destroy(&perf->metrics_idr);
