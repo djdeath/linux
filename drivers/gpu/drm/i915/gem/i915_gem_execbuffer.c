@@ -2099,6 +2099,14 @@ static int eb_oa_config(struct i915_execbuffer *eb)
 	struct i915_perf *perf;
 	int err;
 
+	/*
+	 * If the perf stream was opened with hold preemption, flag the
+	 * request properly so that the priority of the request is bumped once
+	 * it reaches the execlist ports.
+	 */
+	if (i915_gem_context_no_preempt(eb->gem_context))
+		eb->request->flags |= I915_REQUEST_NOPREEMPT;
+
 	if (!eb->oa.config)
 		return 0;
 

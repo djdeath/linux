@@ -96,6 +96,21 @@ static inline void i915_gem_context_set_force_single_submission(struct i915_gem_
 	__set_bit(CONTEXT_FORCE_SINGLE_SUBMISSION, &ctx->flags);
 }
 
+static inline bool i915_gem_context_no_preempt(const struct i915_gem_context *ctx)
+{
+	return test_bit(CONTEXT_NO_PREEMPT, &ctx->flags);
+}
+
+static inline void i915_gem_context_set_no_preempt(struct i915_gem_context *ctx)
+{
+	__set_bit(CONTEXT_NO_PREEMPT, &ctx->flags);
+}
+
+static inline void i915_gem_context_clear_no_preempt(struct i915_gem_context *ctx)
+{
+	__clear_bit(CONTEXT_NO_PREEMPT, &ctx->flags);
+}
+
 static inline bool
 i915_gem_context_user_engines(const struct i915_gem_context *ctx)
 {
