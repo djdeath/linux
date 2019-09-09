@@ -3666,3 +3666,13 @@ void i915_perf_fini(struct drm_i915_private *i915)
 	memset(&perf->ops, 0, sizeof(perf->ops));
 	perf->i915 = NULL;
 }
+
+/**
+ * i915_perf_ioctl_version - Version of the i915-perf subsystem
+ *
+ * This version number is used by userspace to detect available features.
+ */
+int i915_perf_ioctl_version(void)
+{
+	return 1;
+}
