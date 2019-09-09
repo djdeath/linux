@@ -165,6 +165,10 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_PARAM_EXEC_EXT_VERSION:
 		value = i915_gem_execbuffer_ext_version();
 		break;
+	case I915_PARAM_HAS_EXEC_PERF_CONFIG:
+		/* Obviously requires perf support. */
+		value = !!i915->perf.i915;
+		break;
 	default:
 		DRM_DEBUG("Unknown parameter %d\n", param->param);
 		return -EINVAL;

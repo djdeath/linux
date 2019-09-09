@@ -24,6 +24,7 @@
 #include "i915_gem_clflush.h"
 #include "i915_gem_context.h"
 #include "i915_gem_ioctls.h"
+#include "i915_perf.h"
 #include "i915_trace.h"
 #include "i915_user_extensions.h"
 
@@ -46,6 +47,8 @@ enum {
 #define __EXEC_VALIDATED	BIT(30)
 #define __EXEC_INTERNAL_FLAGS	(~0u << 30)
 #define UPDATE			PIN_OFFSET_FIXED
+
+#define EXTRA_VMA 2
 
 #define BATCH_OFFSET_BIAS (256*1024)
 
@@ -278,6 +281,12 @@ struct i915_execbuffer {
 		struct drm_syncobj **syncobj;
 		unsigned long count;
 	} fences;
+
+	struct { /* HW configuration for OA. */
+		struct file *file;
+		struct i915_oa_config *config;
+		struct i915_vma *vma;
+	} oa;
 };
 
 #define exec_entry(EB, VMA) (&(EB)->exec[(VMA)->exec_flags - (EB)->flags])
@@ -899,6 +908,17 @@ put_fence_array(const struct i915_execbuffer *eb)
 	__free_fence_array(eb->fences.syncobj, eb->fences.count);
 }
 
+static void
+put_perf_config(const struct i915_execbuffer *eb)
+{
+	if (!eb->oa.config)
+		return;
+
+	i915_vma_put(eb->oa.vma);
+	i915_oa_config_put(eb->oa.config);
+	fput(eb->oa.file);
+}
+
 static void eb_destroy(const struct i915_execbuffer *eb)
 {
 	GEM_BUG_ON(eb->reloc_cache.rq);
@@ -910,6 +930,7 @@ static void eb_destroy(const struct i915_execbuffer *eb)
 		kfree(eb->buckets);
 
 	put_fence_array(eb);
+	put_perf_config(eb);
 }
 
 static inline u64
@@ -2072,6 +2093,58 @@ add_to_client(struct i915_request *rq, struct drm_file *file)
 	spin_unlock(&file_priv->mm.lock);
 }
 
+static int eb_oa_config(struct i915_execbuffer *eb)
+{
+	struct i915_perf_stream *stream;
+	struct i915_perf *perf;
+	int err;
+
+	if (!eb->oa.config)
+		return 0;
+
+	stream = eb->oa.file->private_data;
+	perf = stream->perf;
+
+	err = mutex_lock_interruptible(&perf->lock);
+	if (err)
+		return err;
+
+	if (stream != perf->exclusive_stream) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	if (stream->engine != eb->engine) { /* FIXME: virtual selection */
+		err = -EINVAL;
+		goto out;
+	}
+
+	err = i915_active_fence_set(&perf->active_config, eb->request);
+	if (err)
+		goto out;
+
+	/*
+	 * If the config hasn't changed, skip reconfiguring the HW (this is
+	 * subject to a delay we want to avoid has much as possible).
+	 *
+	 * After a GPU reset, the oa config will not be recovered.
+	 */
+	if (eb->oa.config == stream->oa_config)
+		goto out;
+
+	err = eb->engine->emit_bb_start(eb->request,
+					eb->oa.vma->node.start, 0,
+					I915_DISPATCH_SECURE); /* ggtt */
+	if (err)
+		goto out;
+
+	swap(eb->oa.config, stream->oa_config);
+
+out:
+	mutex_unlock(&perf->lock);
+	return err;
+}
+
 static int eb_submit(struct i915_execbuffer *eb)
 {
 	int err;
@@ -2097,6 +2170,10 @@ static int eb_submit(struct i915_execbuffer *eb)
 		if (err)
 			return err;
 	}
+
+	err = eb_oa_config(eb);
+	if (err)
+		return err;
 
 	err = eb->engine->emit_bb_start(eb->request,
 					eb->batch->node.start +
@@ -2455,8 +2532,60 @@ signal_fence_array(struct i915_execbuffer *eb)
 	}
 }
 
+static int parse_perf_config(struct i915_user_extension __user *ext, void *data)
+{
+	struct i915_gem_execbuffer_ext_perf perf_config;
+	struct i915_execbuffer *eb = data;
+	struct i915_perf_stream *stream;
+	struct i915_oa_config *config;
+	struct i915_vma *vma;
+	struct file *file;
+	int err;
+
+	if (eb->oa.config)
+		return -EINVAL; /* exclusive */
+
+	if (copy_from_user(&perf_config, ext, sizeof(perf_config)))
+		return -EFAULT;
+
+	if (perf_config.flags)
+		return -EINVAL;
+
+	file = fget(perf_config.perf_fd);
+	if (!file)
+		return -EINVAL;
+
+	stream = i915_perf_file_get_stream(file);
+	if (!stream)
+		return -EINVAL;
+
+	config = i915_perf_get_oa_config(stream->perf, perf_config.oa_config);
+	if (!config) {
+		err = -EINVAL;
+		goto err_file;
+	}
+
+	vma = i915_perf_stream_get_oa_vma(stream, config);
+	if (IS_ERR(vma)) {
+		err = PTR_ERR(vma);
+		goto err_config;
+	}
+
+	eb->oa.vma = vma;
+	eb->oa.file = file;
+	eb->oa.config = config;
+	return 0;
+
+err_config:
+	i915_oa_config_put(config);
+err_file:
+	fput(file);
+	return err;
+}
+
 static const i915_user_extension_fn execbuf_extensions[] = {
 	[I915_EXEC_EXT_FENCE_ARRAY] = parse_fence_array,
+	[I915_EXEC_EXT_PERF_CONFIG] = parse_perf_config,
 };
 
 int i915_gem_execbuffer_ext_version(void)
@@ -2506,11 +2635,12 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 		args->flags |= __EXEC_HAS_RELOC;
 
 	memset(&eb.fences, 0, sizeof(eb.fences));
+	eb.oa.config = NULL;
 
 	eb.exec = exec;
-	eb.vma = (struct i915_vma **)(exec + args->buffer_count + 1);
+	eb.vma = (struct i915_vma **)(exec + args->buffer_count + EXTRA_VMA);
 	eb.vma[0] = NULL;
-	eb.flags = (unsigned int *)(eb.vma + args->buffer_count + 1);
+	eb.flags = (unsigned int *)(eb.vma + args->buffer_count + EXTRA_VMA);
 
 	eb.invalid_flags = __EXEC_OBJECT_UNKNOWN_FLAGS;
 	reloc_cache_init(&eb.reloc_cache, eb.i915);
@@ -2626,6 +2756,17 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 			eb.batch_start_offset = 0;
 			eb.batch = vma;
 		}
+	}
+
+	if (eb.oa.config) {
+		err = i915_vma_pin(eb.oa.vma, 0, 0, PIN_GLOBAL | PIN_HIGH);
+		if (err)
+			goto err_vma;
+
+		eb.vma[eb.buffer_count] = eb.oa.vma;
+		eb.flags[eb.buffer_count] = __EXEC_OBJECT_HAS_PIN;
+		eb.oa.vma->exec_flags = &eb.flags[eb.buffer_count];
+		eb.buffer_count++;
 	}
 
 	if (eb.batch_len == 0)
@@ -2805,7 +2946,7 @@ i915_gem_execbuffer_ioctl(struct drm_device *dev, void *data,
 	/* Copy in the exec list from userland */
 	exec_list = kvmalloc_array(count, sizeof(*exec_list),
 				   __GFP_NOWARN | GFP_KERNEL);
-	exec2_list = kvmalloc_array(count + 1, eb_element_size(),
+	exec2_list = kvmalloc_array(count + EXTRA_VMA, eb_element_size(),
 				    __GFP_NOWARN | GFP_KERNEL);
 	if (exec_list == NULL || exec2_list == NULL) {
 		DRM_DEBUG("Failed to allocate exec list for %d buffers\n",
@@ -2880,7 +3021,7 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 
 	/* Allocate an extra slot for use by the command parser */
-	exec2_list = kvmalloc_array(count + 1, eb_element_size(),
+	exec2_list = kvmalloc_array(count + EXTRA_VMA, eb_element_size(),
 				    __GFP_NOWARN | GFP_KERNEL);
 	if (exec2_list == NULL) {
 		DRM_DEBUG("Failed to allocate exec list for %zd buffers\n",

@@ -624,6 +624,16 @@ typedef struct drm_i915_irq_wait {
  */
 #define I915_PARAM_EXEC_EXT_VERSION  55
 
+/*
+ * Request an i915/perf performance configuration change before running the
+ * commands given in an execbuf.
+ *
+ * Performance configuration ID and the file descriptor of the i915 perf
+ * stream are given through drm_i915_gem_execbuffer_ext_perf. See
+ * I915_EXEC_USE_EXTENSIONS.
+ */
+#define I915_PARAM_HAS_EXEC_PERF_CONFIG 56
+
 /* Must be kept compact -- no holes and well documented */
 
 typedef struct drm_i915_getparam {
@@ -1027,6 +1037,29 @@ struct i915_gem_execbuffer_ext_fence_array {
 	__u64 count; /* number of fences */
 };
 
+struct i915_gem_execbuffer_ext_perf {
+	struct i915_user_extension base; /* .name = I915_EXEC_EXT_PERF_CONFIG */
+
+	/*
+	 * Performance file descriptor returned by DRM_IOCTL_I915_PERF_OPEN.
+	 * This is used to identify that the application requesting a HW
+	 * performance configuration change actually has a right to do so
+	 * because it also has access the i915-perf stream.
+	 */
+	__s32 perf_fd;
+
+	/*
+	 * Unused for now. Must be cleared to zero.
+	 */
+	__u32 flags;
+
+	/*
+	 * OA configuration ID to switch to before executing the commands
+	 * associated to the execbuf.
+	 */
+	__u64 oa_config;
+};
+
 struct drm_i915_gem_execbuffer2 {
 	/**
 	 * List of gem_exec_object2 structs
@@ -1053,9 +1086,11 @@ struct drm_i915_gem_execbuffer2 {
 	 * single struct drm_i915_gem_base_execbuffer_ext and num_cliprects is
 	 * 0. Extensions:
 	 *  - i915_gem_execbuffer_ext_fence_array (I915_EXEC_EXT_FENCE_ARRAY)
+	 *  - i915_gem_execbuffer_ext_perf (I915_EXEC_EXT_PERF_CONFIG)
 	 */
 	__u64 cliprects_ptr;
 #define I915_EXEC_EXT_FENCE_ARRAY 0
+#define I915_EXEC_EXT_PERF_CONFIG 1
 
 	__u64 flags;
 #define I915_EXEC_RING_MASK              (0x3f)
@@ -1065,7 +1100,8 @@ struct drm_i915_gem_execbuffer2 {
 #define I915_EXEC_BLT                    (3<<0)
 #define I915_EXEC_VEBOX                  (4<<0)
 
-/* Used for switching the constants addressing mode on gen4+ RENDER ring.
+/*
+ * Used for switching the constants addressing mode on gen4+ RENDER ring.
  * Gen6+ only supports relative addressing to dynamic state (default) and
  * absolute addressing.
  *
