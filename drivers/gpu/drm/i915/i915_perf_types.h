@@ -16,6 +16,7 @@
 #include <linux/uuid.h>
 #include <linux/wait.h>
 
+#include "i915_active_types.h"
 #include "i915_reg.h"
 #include "intel_wakeref.h"
 
@@ -375,6 +376,11 @@ struct i915_perf {
 	 * descriptor.
 	 */
 	struct i915_perf_stream *exclusive_stream;
+
+	/**
+	 * @active_config: Last request using the active configuration.
+	 */
+	struct i915_active_fence active_config;
 
 	/**
 	 * For rate limiting any notifications of spurious

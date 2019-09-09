@@ -1859,56 +1859,59 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 	return 0;
 
 err_unpin:
-	__i915_vma_unpin(vma);
+	i915_vma_unpin_and_release(&vma, 0);
 err_unref:
 	i915_gem_object_put(bo);
 	return ret;
 }
 
-static void config_oa_regs(struct intel_uncore *uncore,
-			   const struct i915_oa_reg *regs,
-			   u32 n_regs)
+static int emit_oa_config(struct i915_perf_stream *stream)
 {
-	u32 i;
+	struct i915_request *rq;
+	struct i915_vma *vma;
+	int err;
 
-	for (i = 0; i < n_regs; i++) {
-		const struct i915_oa_reg *reg = regs + i;
+	vma = i915_perf_stream_get_oa_vma(stream, stream->oa_config);
+	if (IS_ERR(vma))
+		return PTR_ERR(vma);
 
-		intel_uncore_write(uncore, reg->addr, reg->value);
+	err = i915_vma_pin(vma, 0, 0, PIN_GLOBAL | PIN_HIGH);
+	if (err)
+		goto err_vma_put;
+
+	rq = i915_request_create(stream->engine->kernel_context);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto err_vma_unpin;
 	}
-}
 
-static void delay_after_mux(void)
-{
-	/*
-	 * It apparently takes a fairly long time for a new MUX
-	 * configuration to be be applied after these register writes.
-	 * This delay duration was derived empirically based on the
-	 * render_basic config but hopefully it covers the maximum
-	 * configuration latency.
-	 *
-	 * As a fallback, the checks in _append_oa_reports() to skip
-	 * invalid OA reports do also seem to work to discard reports
-	 * generated before this config has completed - albeit not
-	 * silently.
-	 *
-	 * Unfortunately this is essentially a magic number, since we
-	 * don't currently know of a reliable mechanism for predicting
-	 * how long the MUX config will take to apply and besides
-	 * seeing invalid reports we don't know of a reliable way to
-	 * explicitly check that the MUX config has landed.
-	 *
-	 * It's even possible we've miss characterized the underlying
-	 * problem - it just seems like the simplest explanation why
-	 * a delay at this location would mitigate any invalid reports.
-	 */
-	usleep_range(15000, 20000);
+	err = i915_active_fence_set(&stream->perf->active_config, rq);
+	if (err)
+		goto err_add_request;
+
+	i915_vma_lock(vma);
+	err = i915_request_await_object(rq, vma->obj, 0);
+	if (!err)
+		err = i915_vma_move_to_active(vma, rq, 0);
+	i915_vma_unlock(vma);
+	if (err)
+		goto err_add_request;
+
+	err = rq->engine->emit_bb_start(rq,
+					vma->node.start, 0,
+					I915_DISPATCH_SECURE);
+err_add_request:
+	i915_request_add(rq);
+err_vma_unpin:
+	i915_vma_unpin(vma);
+err_vma_put:
+	i915_vma_put(vma);
+	return err;
 }
 
 static int hsw_enable_metric_set(struct i915_perf_stream *stream)
 {
 	struct intel_uncore *uncore = stream->gt->uncore;
-	const struct i915_oa_config *oa_config = stream->oa_config;
 
 	/*
 	 * PRM:
@@ -1925,13 +1928,7 @@ static int hsw_enable_metric_set(struct i915_perf_stream *stream)
 	intel_uncore_rmw(uncore, GEN6_UCGCTL1,
 			 0, GEN6_CSUNIT_CLOCK_GATE_DISABLE);
 
-	config_oa_regs(uncore, oa_config->mux_regs, oa_config->mux_regs_len);
-	delay_after_mux();
-
-	config_oa_regs(uncore, oa_config->b_counter_regs,
-		       oa_config->b_counter_regs_len);
-
-	return 0;
+	return emit_oa_config(stream);
 }
 
 static void hsw_disable_metric_set(struct i915_perf_stream *stream)
@@ -2295,13 +2292,7 @@ static int gen8_enable_metric_set(struct i915_perf_stream *stream)
 	if (ret)
 		return ret;
 
-	config_oa_regs(uncore, oa_config->mux_regs, oa_config->mux_regs_len);
-	delay_after_mux();
-
-	config_oa_regs(uncore, oa_config->b_counter_regs,
-		       oa_config->b_counter_regs_len);
-
-	return 0;
+	return emit_oa_config(stream);
 }
 
 static void gen8_disable_metric_set(struct i915_perf_stream *stream)
@@ -2578,10 +2569,8 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	perf->exclusive_stream = stream;
 
 	ret = perf->ops.enable_metric_set(stream);
-	if (ret) {
-		DRM_DEBUG("Unable to enable metric set\n");
+	if (ret)
 		goto err_enable;
-	}
 
 	DRM_DEBUG("opening stream oa config uuid=%s\n",
 		  stream->oa_config->uuid);
@@ -3979,6 +3968,7 @@ void i915_perf_init(struct drm_i915_private *i915)
 
 	if (perf->ops.enable_metric_set) {
 		mutex_init(&perf->lock);
+		INIT_ACTIVE_FENCE(&perf->active_config, &perf->lock);
 
 		oa_sample_rate_hard_limit = 1000 *
 			(RUNTIME_INFO(i915)->cs_timestamp_frequency_khz / 2);
