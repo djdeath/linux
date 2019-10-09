@@ -1233,6 +1233,9 @@ static bool can_merge_rq(const struct i915_request *prev,
 	if (i915_request_completed(next))
 		return true;
 
+	if (unlikely(prev->flags ^ next->flags))
+		return false;
+
 	if (!can_merge_ctx(prev->hw_context, next->hw_context))
 		return false;
 
