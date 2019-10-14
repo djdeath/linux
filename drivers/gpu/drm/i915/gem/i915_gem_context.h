@@ -127,6 +127,24 @@ static inline void i915_gem_context_unpin_hw_id(struct i915_gem_context *ctx)
 	atomic_dec(&ctx->hw_id_pin_count);
 }
 
+static inline bool
+i915_gem_context_nopreempt(const struct i915_gem_context *ctx)
+{
+	return test_bit(CONTEXT_NOPREEMPT, &ctx->flags);
+}
+
+static inline void
+i915_gem_context_set_nopreempt(struct i915_gem_context *ctx)
+{
+	set_bit(CONTEXT_NOPREEMPT, &ctx->flags);
+}
+
+static inline void
+i915_gem_context_clear_nopreempt(struct i915_gem_context *ctx)
+{
+	clear_bit(CONTEXT_NOPREEMPT, &ctx->flags);
+}
+
 static inline bool i915_gem_context_is_kernel(struct i915_gem_context *ctx)
 {
 	return !ctx->file_priv;
