@@ -528,6 +528,12 @@ static void icl_ctx_workarounds_init(struct intel_engine_cs *engine,
 		 intel_uncore_read(engine->uncore, GEN8_L3CNTLREG) |
 		 GEN8_ERRDETBCTRL);
 
+	/* Wa_1407352427:icl */
+	wa_write(wal,
+		 GEN11_SCCGCTL,
+		 intel_uncore_read(engine->uncore, GEN11_SCCGCTL) |
+		 GEN11_SCCGCTL_PSD_CLOCK_GATING_DISABLE);
+
 	/* Wa_1604370585:icl (pre-prod)
 	 * Formerly known as WaPushConstantDereferenceHoldDisable
 	 */
