@@ -2596,16 +2596,47 @@ await_fence_array(struct i915_execbuffer *eb,
 
 	for (n = 0; n < nfences; n++) {
 		struct drm_syncobj *syncobj;
+		struct dma_fence_chain *chain;
 		unsigned int flags;
 
 		syncobj = ptr_unpack_bits(fences[n].syncobj, &flags, 2);
 		if (!(flags & I915_EXEC_FENCE_WAIT))
 			continue;
 
-		err = i915_request_await_dma_fence(eb->request,
-						   fences[n].dma_fence);
-		if (err < 0)
-			return err;
+		/*
+		 * If we're dealing with a dma-fence-chain, peel the chain by
+		 * adding all of the unsignaled fences
+		 * (dma_fence_chain_for_each does that for us) the chain
+		 * points to.
+		 *
+		 * This enables us to identify waits on i915 fences and allows
+		 * for faster engine-to-engine synchronization using HW
+		 * semaphores.
+		 */
+		chain = to_dma_fence_chain(fences[n].dma_fence);
+		if (chain) {
+			struct dma_fence *iter;
+
+			dma_fence_chain_for_each(iter, fences[n].dma_fence) {
+				struct dma_fence_chain *iter_chain =
+					to_dma_fence_chain(iter);
+
+				GEM_BUG_ON(!iter_chain);
+
+				err = i915_request_await_dma_fence(eb->request,
+								   iter_chain->fence);
+				if (err < 0) {
+					dma_fence_put(iter);
+					return err;
+				}
+			}
+
+		} else {
+			err = i915_request_await_dma_fence(eb->request,
+							   fences[n].dma_fence);
+			if (err < 0)
+				return err;
+		}
 	}
 
 	return 0;
