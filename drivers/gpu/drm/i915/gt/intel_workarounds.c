@@ -538,6 +538,16 @@ static void icl_ctx_workarounds_init(struct intel_engine_cs *engine,
 				   FF_MODE) |
 		 GEN9_FF_MODE_TESSELATION_DOP_GATING_DISABLE);
 
+	/* Wa_1408615072:icl
+	 *
+	 * Prevents hang.
+	 */
+	wa_write(wal,
+		 GEN10_UNSLCGCTL,
+		 intel_uncore_read(engine->uncore,
+				   GEN10_UNSLCGCTL) |
+		 GEN10_UNSLCGCTL_VSUNIT_CLOCK_GATING_DISABLE);
+
 	/* Wa_1407352427:icl */
 	wa_write(wal,
 		 GEN11_COMMON_SLICE_CHICKEN3,
