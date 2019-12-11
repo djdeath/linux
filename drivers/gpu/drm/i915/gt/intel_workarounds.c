@@ -528,6 +528,16 @@ static void icl_ctx_workarounds_init(struct intel_engine_cs *engine,
 		 intel_uncore_read(engine->uncore, GEN8_L3CNTLREG) |
 		 GEN8_ERRDETBCTRL);
 
+	/* Wa_1408767742:icl
+	 *
+	 * Prevents corruption linked to gating of tesselation.
+	 */
+	wa_write(wal,
+		 FF_MODE,
+		 intel_uncore_read(engine->uncore,
+				   FF_MODE) |
+		 GEN9_FF_MODE_TESSELATION_DOP_GATING_DISABLE);
+
 	/* Wa_1407352427:icl */
 	wa_write(wal,
 		 GEN11_COMMON_SLICE_CHICKEN3,
