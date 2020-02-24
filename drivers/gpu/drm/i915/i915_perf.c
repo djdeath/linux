@@ -1643,6 +1643,15 @@ static u32 *save_restore_register(struct i915_perf_stream *stream, u32 *cs,
 	return cs;
 }
 
+enum {
+	START_TS,
+	NOW_TS,
+	DELTA_TS,
+	JUMP_PREDICATE,
+	DELTA_TARGET,
+	N_CS_GPR
+};
+
 static int alloc_noa_wait(struct i915_perf_stream *stream)
 {
 	struct drm_i915_private *i915 = stream->perf->i915;
@@ -1657,14 +1666,6 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 #define CS_GPR(x) GEN8_RING_CS_GPR(base, x)
 	u32 *batch, *ts0, *cs, *jump;
 	int ret, i;
-	enum {
-		START_TS,
-		NOW_TS,
-		DELTA_TS,
-		JUMP_PREDICATE,
-		DELTA_TARGET,
-		N_CS_GPR
-	};
 
 	bo = i915_gem_object_create_internal(i915, 4096);
 	if (IS_ERR(bo)) {
@@ -1689,15 +1690,6 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 		ret = PTR_ERR(batch);
 		goto err_unpin;
 	}
-
-	/* Save registers. */
-	for (i = 0; i < N_CS_GPR; i++)
-		cs = save_restore_register(
-			stream, cs, true /* save */, CS_GPR(i),
-			INTEL_GT_SCRATCH_FIELD_PERF_CS_GPR + 8 * i, 2);
-	cs = save_restore_register(
-		stream, cs, true /* save */, MI_PREDICATE_RESULT_1,
-		INTEL_GT_SCRATCH_FIELD_PERF_PREDICATE_RESULT_1, 1);
 
 	/* First timestamp snapshot location. */
 	ts0 = cs;
@@ -1797,6 +1789,8 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 	*cs++ = i915_ggtt_offset(vma) + (jump - batch) * 4;
 	*cs++ = 0;
 
+	stream->noa_wait_restore_offset = 4 * (cs - batch);
+
 	/* Restore registers. */
 	for (i = 0; i < N_CS_GPR; i++)
 		cs = save_restore_register(
@@ -1861,16 +1855,21 @@ static struct i915_oa_config_bo *
 alloc_oa_config_buffer(struct i915_perf_stream *stream,
 		       struct i915_oa_config *oa_config)
 {
+	const u32 base = stream->engine->mmio_base;
 	struct drm_i915_gem_object *obj;
 	struct i915_oa_config_bo *oa_bo;
 	size_t config_length = 0;
 	u32 *cs;
-	int err;
+	int i, err;
 
 	oa_bo = kzalloc(sizeof(*oa_bo), GFP_KERNEL);
 	if (!oa_bo)
 		return ERR_PTR(-ENOMEM);
 
+	config_length += 8 * (N_CS_GPR + 1); /* save registers (8 bytes each) */
+	config_length += 8; /* Load identifier */
+	config_length += 13; /* Compare identifier */
+	config_length += 3; /* conditional MI_BATCH_BUFFER_START */
 	config_length += num_lri_dwords(oa_config->mux_regs_len);
 	config_length += num_lri_dwords(oa_config->b_counter_regs_len);
 	config_length += num_lri_dwords(oa_config->flex_regs_len);
@@ -1889,6 +1888,49 @@ alloc_oa_config_buffer(struct i915_perf_stream *stream,
 		goto err_oa_bo;
 	}
 
+	/* Save registers we'll need in noa_wait. */
+	for (i = 0; i < N_CS_GPR; i++) {
+		cs = save_restore_register(
+			stream, cs, true /* save */, CS_GPR(i),
+			INTEL_GT_SCRATCH_FIELD_PERF_CS_GPR + 8 * i, 2);
+	}
+	cs = save_restore_register(
+		stream, cs, true /* save */, MI_PREDICATE_RESULT_1,
+		INTEL_GT_SCRATCH_FIELD_PERF_PREDICATE_RESULT_1, 1);
+
+	/* Load the current identifier from the scratch buffer. */
+	cs = save_restore_register(
+		stream, cs, false /* load */, CS_GPR(0),
+		INTEL_GT_SCRATCH_FIELD_PERF_CURRENT_OA_IDENTIFIER, 2);
+
+	*cs++ = MI_LOAD_REGISTER_IMM(2);
+	*cs++ = i915_mmio_reg_offset(CS_GPR(1));
+	*cs++ = oa_config->identifier & 0xffffffff;
+	*cs++ = i915_mmio_reg_offset(CS_GPR(1)) + 4;
+	*cs++ = oa_config->identifier >> 32;
+
+	*cs++ = MI_MATH(5);
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(0));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(1));
+	*cs++ = MI_MATH_SUB;
+	*cs++ = MI_MATH_STOREINV(MI_MATH_REG(0), MI_MATH_REG_ZF);
+
+	*cs++ = MI_LOAD_REGISTER_REG | (3 - 2);
+	*cs++ = i915_mmio_reg_offset(CS_GPR(0));
+	*cs++ = i915_mmio_reg_offset(MI_PREDICATE_RESULT_1);
+
+	/* If the configuration hasn't changed, skip reprogramming and jump to
+	 * the restore part of noa_wait.
+	 */
+	*cs++ = (INTEL_GEN(stream->perf->i915) < 8 ?
+		 MI_BATCH_BUFFER_START :
+		 MI_BATCH_BUFFER_START_GEN8) |
+		MI_BATCH_PREDICATE;
+	*cs++ = i915_ggtt_offset(stream->noa_wait) +
+		stream->noa_wait_restore_offset;
+	*cs++ = 0;
+
+	/* If the configuration ID didn't match, reconfigure OA/NOA. */
 	cs = write_cs_mi_lri(cs,
 			     oa_config->mux_regs,
 			     oa_config->mux_regs_len);
@@ -1898,6 +1940,11 @@ alloc_oa_config_buffer(struct i915_perf_stream *stream,
 	cs = write_cs_mi_lri(cs,
 			     oa_config->flex_regs,
 			     oa_config->flex_regs_len);
+
+	/* Update the configuration ID. */
+	cs = save_restore_register(
+		stream, cs, true /* save */, CS_GPR(0),
+		INTEL_GT_SCRATCH_FIELD_PERF_CURRENT_OA_IDENTIFIER, 2);
 
 	/* Jump into the active wait. */
 	*cs++ = (INTEL_GEN(stream->perf->i915) < 8 ?
@@ -4308,6 +4355,8 @@ void i915_perf_init(struct drm_i915_private *i915)
 
 		atomic64_set(&perf->noa_programming_delay,
 			     500 * 1000 /* 500us */);
+
+		atomic64_set(&perf->oa_config_identifier, 1);
 
 		perf->i915 = i915;
 	}

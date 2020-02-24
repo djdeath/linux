@@ -311,6 +311,12 @@ struct i915_perf_stream {
 	 * reprogrammed.
 	 */
 	struct i915_vma *noa_wait;
+
+	/**
+	 * @noa_wait_restore_offset: Offset in @noa_wait where register are
+	 * restored back to the application's state.
+	 */
+	u32 noa_wait_restore_offset;
 };
 
 /**
