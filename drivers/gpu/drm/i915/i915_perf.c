@@ -1239,6 +1239,7 @@ static struct intel_context *oa_pin_context(struct i915_perf_stream *stream)
 			stream->pinned_ctx = ce;
 			break;
 		}
+		atomic_inc(&ce->perf_count);
 	}
 	i915_gem_context_unlock_engines(ctx);
 
@@ -1346,6 +1347,7 @@ static void oa_put_render_ctx_id(struct i915_perf_stream *stream)
 	ce = fetch_and_zero(&stream->pinned_ctx);
 	if (ce) {
 		ce->tag = 0; /* recomputed on next submission after parking */
+		atomic_dec(&ce->perf_count);
 		intel_context_unpin(ce);
 	}
 

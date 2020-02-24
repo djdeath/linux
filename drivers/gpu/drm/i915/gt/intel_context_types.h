@@ -82,6 +82,9 @@ struct intel_context {
 
 	unsigned int active_count; /* protected by timeline->mutex */
 
+	/* Tracks whether performance monitoring is active on this context. */
+	atomic_t perf_count;
+
 	atomic_t pin_count;
 	struct mutex pin_mutex; /* guards pinning and associated on-gpuing */
 

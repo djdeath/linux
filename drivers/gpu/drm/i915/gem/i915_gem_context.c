@@ -1353,6 +1353,14 @@ static int set_sseu(struct i915_gem_context *ctx,
 		goto out_ce;
 	}
 
+	/* Performance monitoring active on this context. Disallowing power
+	 * configuration for the duration.
+	 */
+	if (atomic_read(&ce->perf_count) != 0) {
+		ret = -EBUSY;
+		goto out_ce;
+	}
+
 	ret = user_to_context_sseu(i915, &user_sseu, &sseu);
 	if (ret)
 		goto out_ce;
