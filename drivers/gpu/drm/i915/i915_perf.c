@@ -3956,6 +3956,8 @@ int i915_perf_add_config_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 	}
 
+	oa_config->identifier = atomic64_inc_return(&perf->oa_config_identifier);
+
 	oa_config->perf = perf;
 	kref_init(&oa_config->ref);
 

@@ -43,6 +43,8 @@ struct i915_oa_config {
 	char uuid[UUID_STRING_LEN + 1];
 	int id;
 
+	u64 identifier;
+
 	const struct i915_oa_reg *mux_regs;
 	u32 mux_regs_len;
 	const struct i915_oa_reg *b_counter_regs;
@@ -427,6 +429,8 @@ struct i915_perf {
 	const struct i915_oa_format *oa_formats;
 
 	atomic64_t noa_programming_delay;
+
+	atomic64_t oa_config_identifier;
 };
 
 #endif /* _I915_PERF_TYPES_H_ */
