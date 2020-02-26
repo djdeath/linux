@@ -16,6 +16,7 @@
 #include <linux/uuid.h>
 #include <linux/wait.h>
 
+#include "gt/intel_sseu.h"
 #include "i915_reg.h"
 #include "intel_wakeref.h"
 
@@ -309,6 +310,16 @@ struct i915_perf_stream {
 	 * reprogrammed.
 	 */
 	struct i915_vma *noa_wait;
+
+	/**
+	 * @sseu: sseu configuration allowed to run while perf is active.
+	 */
+	struct intel_sseu expected_sseu;
+
+	/**
+	 * @sseu_fence:
+	 */
+	struct dma_fence *sseu_fence;
 };
 
 /**
@@ -427,6 +438,9 @@ struct i915_perf {
 	const struct i915_oa_format *oa_formats;
 
 	atomic64_t noa_programming_delay;
+
+	u64 sseu_fence_context;
+	atomic64_t sseu_fence_seqno;
 };
 
 #endif /* _I915_PERF_TYPES_H_ */
