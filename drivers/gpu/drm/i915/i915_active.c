@@ -515,23 +515,53 @@ int i915_active_wait(struct i915_active *ref)
 	return 0;
 }
 
-int i915_request_await_active(struct i915_request *rq, struct i915_active *ref)
+static int await_active(struct i915_request *rq,
+			struct i915_active_fence *active)
 {
-	int err = 0;
+	struct dma_fence *fence;
 
-	if (rcu_access_pointer(ref->excl.fence)) {
-		struct dma_fence *fence;
+	if (is_barrier(active))
+		return 0;
 
-		rcu_read_lock();
-		fence = dma_fence_get_rcu_safe(&ref->excl.fence);
-		rcu_read_unlock();
-		if (fence) {
-			err = i915_request_await_dma_fence(rq, fence);
-			dma_fence_put(fence);
-		}
+	fence = i915_active_fence_get(active);
+	if (fence) {
+		int err;
+
+		err = i915_request_await_dma_fence(rq, fence);
+		dma_fence_put(fence);
+		if (err < 0)
+			return err;
 	}
 
-	/* In the future we may choose to await on all fences */
+	return 0;
+}
+
+int i915_request_await_active(struct i915_request *rq,
+			      struct i915_active *ref,
+			      unsigned int flags)
+{
+	int err;
+
+	/* We must always wait for the exclusive fence! */
+	if (rcu_access_pointer(ref->excl.fence)) {
+		err = await_active(rq, &ref->excl);
+		if (err)
+			return err;
+	}
+
+	if (flags & I915_ACTIVE_AWAIT_ALL && i915_active_acquire_if_busy(ref)) {
+		struct active_node *it, *n;
+
+		err = 0;
+		rbtree_postorder_for_each_entry_safe(it, n, &ref->tree, node) {
+			err = await_active(rq, &it->base);
+			if (err)
+				break;
+		}
+		i915_active_release(ref);
+		if (err)
+			return err;
+	}
 
 	return err;
 }
