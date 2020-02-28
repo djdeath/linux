@@ -2754,17 +2754,6 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 			goto err_request;
 	}
 
-	if (i915->perf.exclusive_stream &&
-	    i915->perf.exclusive_stream->expected_sseu.slice_mask &&
-	    memcmp(&i915->perf.exclusive_stream->expected_sseu,
-		   &eb.context->sseu, sizeof(eb.context->sseu)) != 0) {
-		err = i915_request_await_dma_fence(
-			eb.request,
-			i915->perf.exclusive_stream->sseu_fence);
-		if (err < 0)
-			goto err_request;
-	}
-
 	if (out_fence_fd != -1) {
 		out_fence = sync_file_create(&eb.request->fence);
 		if (!out_fence) {

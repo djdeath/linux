@@ -1969,18 +1969,6 @@ enum drm_i915_perf_property_id {
 	 */
 	DRM_I915_PERF_PROP_HOLD_PREEMPTION,
 
-	/**
-	 * Specifying this property will prevent contexts that do not share
-	 * the same SSEU power configuration to be held for the duration of
-	 * the performance recording.
-	 *
-	 * This parameter's value is a pointer to a struct
-	 * drm_i915_gem_context_param_sseu.
-	 *
-	 * This property is available in perf revision 4.
-	 */
-	DRM_I915_PERF_PROP_ALLOWED_SSEU,
-
 	DRM_I915_PERF_PROP_MAX /* non-ABI */
 };
 

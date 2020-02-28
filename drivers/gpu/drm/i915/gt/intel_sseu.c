@@ -80,17 +80,11 @@ u32 intel_sseu_make_rpcs(struct drm_i915_private *i915,
 	 * If i915/perf is active, we want a stable powergating configuration
 	 * on the system.
 	 *
-	 * We choose full enablement on !Gen11.
-	 *
-	 * On ICL we know there are use cases which disable slices for
-	 * functional, apart for performance reasons. If i915/perf specifies
-	 * an expected_sseu, then a fence will be added to submissions of
-	 * contexts not matching this expectation, preventing them from
-	 * running while i915/perf is active. Otherwise use a common subset of
-	 * powergating known to work for all contexts (half the EUs).
+	 * We could choose full enablement, but on ICL we know there are use
+	 * cases which disable slices for functional, apart for performance
+	 * reasons. So in this case we select a known stable subset.
 	 */
-	if (!i915->perf.exclusive_stream ||
-	    !i915->perf.exclusive_stream->expected_sseu.slice_mask != 0) {
+	if (!i915->perf.exclusive_stream) {
 		ctx_sseu = *req_sseu;
 	} else {
 		ctx_sseu = intel_sseu_from_device_info(sseu);

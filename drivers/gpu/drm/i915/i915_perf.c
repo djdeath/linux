@@ -363,8 +363,6 @@ struct perf_open_properties {
 	int oa_period_exponent;
 
 	struct intel_engine_cs *engine;
-
-	struct intel_sseu expected_sseu;
 };
 
 struct i915_oa_config_bo {
@@ -377,53 +375,6 @@ struct i915_oa_config_bo {
 static struct ctl_table_header *sysctl_header;
 
 static enum hrtimer_restart oa_poll_check_timer_cb(struct hrtimer *hrtimer);
-
-struct i915_perf_dma_fence {
-	struct dma_fence base;
-
-	spinlock_t lock;
-};
-
-static const char *i915_perf_fence_get_driver_name(struct dma_fence *fence)
-{
-	return "i915-perf";
-}
-
-static const char *i915_perf_fence_get_timeline_name(struct dma_fence *fence)
-{
-	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
-		return "signaled";
-
-	return "i915-perf monitoring";
-}
-static void i915_perf_fence_release(struct dma_fence *fence)
-{
-	kfree(fence);
-}
-
-static const struct dma_fence_ops i915_perf_fence_ops = {
-	.get_driver_name = i915_perf_fence_get_driver_name,
-	.get_timeline_name = i915_perf_fence_get_timeline_name,
-	.release = i915_perf_fence_release,
-};
-
-static struct dma_fence *
-i915_perf_get_dma_fence(struct i915_perf *perf)
-{
-	struct i915_perf_dma_fence *fence =
-		kzalloc(sizeof(struct i915_perf_dma_fence), GFP_KERNEL);
-
-	if (!fence)
-		return NULL;
-
-	spin_lock_init(&fence->lock);
-
-	dma_fence_init(&fence->base, &i915_perf_fence_ops, &fence->lock,
-		       perf->sseu_fence_context,
-		       atomic64_inc_return(&perf->sseu_fence_seqno));
-
-	return &fence->base;
-}
 
 void i915_oa_config_release(struct kref *ref)
 {
@@ -1450,8 +1401,6 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 
 	free_oa_configs(stream);
 	free_noa_wait(stream);
-
-	dma_fence_signal(stream->sseu_fence);
 
 	if (perf->spurious_report_rs.missed) {
 		DRM_NOTE("%d spurious OA report notices suppressed due to ratelimiting\n",
@@ -2899,7 +2848,6 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		return -EINVAL;
 
 	stream->hold_preemption = props->hold_preemption;
-	stream->expected_sseu = props->expected_sseu;
 
 	stream->oa_buffer.format =
 		perf->oa_formats[props->oa_format].format;
@@ -3369,8 +3317,6 @@ static void i915_perf_destroy_locked(struct i915_perf_stream *stream)
 	if (stream->ctx)
 		i915_gem_context_put(stream->ctx);
 
-	dma_fence_put(stream->sseu_fence);
-
 	kfree(stream);
 }
 
@@ -3520,13 +3466,9 @@ i915_perf_open_ioctl_locked(struct i915_perf *perf,
 	stream->perf = perf;
 	stream->ctx = specific_ctx;
 
-	stream->sseu_fence = i915_perf_get_dma_fence(perf);
-	if (!stream->sseu_fence)
-		goto err_alloc;
-
 	ret = i915_oa_stream_init(stream, param, props);
 	if (ret)
-		goto err_alloc_fence;
+		goto err_alloc;
 
 	/* we avoid simply assigning stream->sample_flags = props->sample_flags
 	 * to have _stream_init check the combination of sample flags more
@@ -3561,9 +3503,6 @@ i915_perf_open_ioctl_locked(struct i915_perf *perf,
 err_flags:
 	if (stream->ops->destroy)
 		stream->ops->destroy(stream);
-err_alloc_fence:
-	dma_fence_signal(stream->sseu_fence);
-	dma_fence_put(stream->sseu_fence);
 err_alloc:
 	kfree(stream);
 err_ctx:
@@ -3718,20 +3657,6 @@ static int read_properties_unlocked(struct i915_perf *perf,
 		case DRM_I915_PERF_PROP_HOLD_PREEMPTION:
 			props->hold_preemption = !!value;
 			break;
-		case DRM_I915_PERF_PROP_ALLOWED_SSEU: {
-			struct drm_i915_gem_context_param_sseu user_sseu;
-
-			if (copy_from_user(&user_sseu,
-					   u64_to_user_ptr(value),
-					   sizeof(user_sseu))) {
-				return -EFAULT;
-			}
-			ret = i915_gem_user_to_context_sseu(
-				perf->i915, &user_sseu, &props->expected_sseu);
-			if (ret)
-				return ret;
-			break;
-		}
 		case DRM_I915_PERF_PROP_MAX:
 			MISSING_CASE(id);
 			return -EINVAL;
@@ -4448,9 +4373,6 @@ void i915_perf_init(struct drm_i915_private *i915)
 		atomic64_set(&perf->noa_programming_delay,
 			     500 * 1000 /* 500us */);
 
-		perf->sseu_fence_context = dma_fence_context_alloc(1);
-		atomic64_set(&perf->sseu_fence_seqno, 1);
-
 		perf->i915 = i915;
 	}
 }
@@ -4508,12 +4430,8 @@ int i915_perf_ioctl_version(void)
 	 *    preemption on a particular context so that performance data is
 	 *    accessible from a delta of MI_RPC reports without looking at the
 	 *    OA buffer.
-	 *
-	 * 4: Add DRM_I915_PERF_PROP_ALLOWED_SSEU to limit what contexts can
-	 *    be run for the duration of the performance recording based on
-	 *    their SSEU configuration.
 	 */
-	return 4;
+	return 3;
 }
 
 #if IS_ENABLED(CONFIG_DRM_I915_SELFTEST)
