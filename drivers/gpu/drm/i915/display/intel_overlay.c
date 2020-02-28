@@ -272,7 +272,7 @@ static int intel_overlay_on(struct intel_overlay *overlay)
 
 	i915_request_add(rq);
 
-	return i915_active_wait(&overlay->last_flip);
+	return i915_active_wait(&overlay->last_flip, TASK_INTERRUPTIBLE);
 }
 
 static void intel_overlay_flip_prepare(struct intel_overlay *overlay,
@@ -429,14 +429,14 @@ static int intel_overlay_off(struct intel_overlay *overlay)
 	intel_overlay_flip_prepare(overlay, NULL);
 	i915_request_add(rq);
 
-	return i915_active_wait(&overlay->last_flip);
+	return i915_active_wait(&overlay->last_flip, TASK_INTERRUPTIBLE);
 }
 
 /* recover from an interruption due to a signal
  * We have to be careful not to repeat work forever an make forward progess. */
 static int intel_overlay_recover_from_interrupt(struct intel_overlay *overlay)
 {
-	return i915_active_wait(&overlay->last_flip);
+	return i915_active_wait(&overlay->last_flip, TASK_INTERRUPTIBLE);
 }
 
 /* Wait for pending overlay flip and release old frame.
@@ -477,7 +477,7 @@ static int intel_overlay_release_old_vid(struct intel_overlay *overlay)
 
 	i915_request_add(rq);
 
-	return i915_active_wait(&overlay->last_flip);
+	return i915_active_wait(&overlay->last_flip, TASK_INTERRUPTIBLE);
 }
 
 void intel_overlay_reset(struct drm_i915_private *dev_priv)

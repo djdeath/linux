@@ -153,7 +153,7 @@ static int live_active_wait(void *arg)
 	if (IS_ERR(active))
 		return PTR_ERR(active);
 
-	i915_active_wait(&active->base);
+	i915_active_wait(&active->base, TASK_UNINTERRUPTIBLE);
 	if (!READ_ONCE(active->retired)) {
 		struct drm_printer p = drm_err_printer(__func__);
 
@@ -230,7 +230,7 @@ static int live_active_barrier(void *arg)
 	i915_active_release(&active->base);
 
 	if (err == 0)
-		err = i915_active_wait(&active->base);
+		err = i915_active_wait(&active->base, TASK_UNINTERRUPTIBLE);
 
 	if (err == 0 && !READ_ONCE(active->retired)) {
 		pr_err("i915_active not retired after flushing barriers!\n");

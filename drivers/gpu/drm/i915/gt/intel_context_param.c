@@ -15,7 +15,7 @@ int intel_context_set_ring_size(struct intel_context *ce, long sz)
 	if (intel_context_lock_pinned(ce))
 		return -EINTR;
 
-	err = i915_active_wait(&ce->active);
+	err = i915_active_wait(&ce->active, TASK_INTERRUPTIBLE);
 	if (err < 0)
 		goto unlock;
 

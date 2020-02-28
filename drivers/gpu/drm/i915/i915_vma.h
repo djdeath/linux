@@ -380,7 +380,7 @@ int i915_vma_wait_for_bind(struct i915_vma *vma);
 static inline int i915_vma_sync(struct i915_vma *vma)
 {
 	/* Wait for the asynchronous bindings and pending GPU reads */
-	return i915_active_wait(&vma->active);
+	return i915_active_wait(&vma->active, TASK_INTERRUPTIBLE);
 }
 
 #endif
