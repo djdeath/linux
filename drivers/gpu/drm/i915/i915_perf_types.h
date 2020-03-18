@@ -160,10 +160,15 @@ struct i915_perf_stream {
 	int sample_size;
 
 	/**
-	 * @ctx: %NULL if measuring system-wide across all contexts or a
-	 * specific context that is being monitored.
+	 * @n_ctxs: Number of contexts pinned for the recording.
 	 */
-	struct i915_gem_context *ctx;
+	u32 n_ctxs;
+
+	/**
+	 * @ctxs: All to %NULL if measuring system-wide across all contexts or
+	 * a list specific contexts that are being monitored.
+	 */
+	struct i915_gem_context **ctxs;
 
 	/**
 	 * @enabled: Whether the stream is currently enabled, considering
@@ -198,19 +203,31 @@ struct i915_perf_stream {
 	struct llist_head oa_config_bos;
 
 	/**
-	 * @pinned_ctx: The OA context specific information.
+	 * @pinned_ctxs: A array of logical context details needed for
+	 * filtering and their associated pinned ID.
 	 */
-	struct intel_context *pinned_ctx;
+	struct i915_perf_context_detail {
+		/**
+		 * @ce: The OA context specific information.
+		 */
+		struct intel_context *ce;
+
+		/**
+		 * @id: The ids of the specific contexts.
+		 */
+		u32 id;
+	} *pinned_ctxs;
 
 	/**
-	 * @specific_ctx_id: The id of the specific context.
+	 * @n_pinned_ctxs: Length of the @pinned_ctxs array, 0 if measuring
+	 * system-wide across all contexts.
 	 */
-	u32 specific_ctx_id;
+	u32 n_pinned_ctxs;
 
 	/**
-	 * @specific_ctx_id_mask: The mask used to masking specific_ctx_id bits.
+	 * @ctx_id_mask: The mask used to masking specific_ctx_id bits.
 	 */
-	u32 specific_ctx_id_mask;
+	u32 ctx_id_mask;
 
 	/**
 	 * @poll_check_timer: High resolution timer that will periodically
@@ -246,7 +263,7 @@ struct i915_perf_stream {
 	struct {
 		struct i915_vma *vma;
 		u8 *vaddr;
-		u32 last_ctx_id;
+		bool last_ctx_match;
 		int format;
 		int format_size;
 		int size_exponent;
