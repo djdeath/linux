@@ -663,6 +663,7 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 
 #define GEN8_OABUFFER_UDW _MMIO(0x23b4)
 #define GEN8_OABUFFER _MMIO(0x2b14)
+#define  GEN8_OABUFFER_EDGE_TRIGGER         (1 << 2)
 #define  GEN8_OABUFFER_MEM_SELECT_GGTT      (1 << 0)  /* 0: PPGTT, 1: GGTT */
 
 #define GEN7_OASTATUS1 _MMIO(0x2364)
@@ -714,6 +715,7 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 #define GEN12_OAG_OABUFFER  _MMIO(0xdb08)
 #define  GEN12_OAG_OABUFFER_BUFFER_SIZE_MASK  (0x7)
 #define  GEN12_OAG_OABUFFER_BUFFER_SIZE_SHIFT (3)
+#define  GEN12_OAG_OABUFFER_EDGE_TRIGGER      (1 << 2)
 #define  GEN12_OAG_OABUFFER_MEMORY_SELECT     (1 << 0) /* 0: PPGTT, 1: GGTT */
 
 #define GEN12_OAG_OAGLBCTXCTRL _MMIO(0x2b28)

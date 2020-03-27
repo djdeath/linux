@@ -915,6 +915,15 @@ static bool pardon_reg(struct drm_i915_private *i915, i915_reg_t reg)
 	static const struct regmask pardon[] = {
 		{ GEN9_CTX_PREEMPT_REG, INTEL_GEN_MASK(9, 9) },
 		{ GEN8_L3SQCREG4, INTEL_GEN_MASK(9, 9) },
+
+		/*
+		 * These registers are global ones. They are used to trigger
+		 * OA reports into the global OA buffer.
+		 */
+		{ OAREPORTTRIG2, INTEL_GEN_MASK(7, 11) },
+		{ OAREPORTTRIG6, INTEL_GEN_MASK(7, 11) },
+		{ GEN12_OAG_OAREPORTTRIG2, INTEL_GEN_MASK(12, 12) },
+		{ GEN12_OAG_OAREPORTTRIG6, INTEL_GEN_MASK(12, 12) },
 	};
 
 	return find_reg(i915, reg, pardon, ARRAY_SIZE(pardon));

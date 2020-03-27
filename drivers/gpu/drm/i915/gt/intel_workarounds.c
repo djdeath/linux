@@ -1129,6 +1129,10 @@ static void gen9_whitelist_build(struct i915_wa_list *w)
 
 	/* WaSendPushConstantsFromMMIO:skl,bxt */
 	whitelist_reg(w, COMMON_SLICE_CHICKEN2);
+
+	/* Allow userspace trigger OA report generation in OA buffer. */
+	whitelist_reg(w, OAREPORTTRIG2);
+	whitelist_reg(w, OAREPORTTRIG6);
 }
 
 static void skl_whitelist_build(struct intel_engine_cs *engine)
@@ -1210,6 +1214,10 @@ static void cnl_whitelist_build(struct intel_engine_cs *engine)
 
 	/* WaEnablePreemptionGranularityControlByUMD:cnl */
 	whitelist_reg(w, GEN8_CS_CHICKEN1);
+
+	/* Allow userspace trigger OA report generation in OA buffer. */
+	whitelist_reg(w, OAREPORTTRIG2);
+	whitelist_reg(w, OAREPORTTRIG6);
 }
 
 static void icl_whitelist_build(struct intel_engine_cs *engine)
@@ -1239,6 +1247,12 @@ static void icl_whitelist_build(struct intel_engine_cs *engine)
 		whitelist_reg_ext(w, PS_INVOCATION_COUNT,
 				  RING_FORCE_TO_NONPRIV_ACCESS_RD |
 				  RING_FORCE_TO_NONPRIV_RANGE_4);
+
+		/*
+		 * Allow userspace trigger OA report generation in OA buffer.
+		 */
+		whitelist_reg(w, OAREPORTTRIG2);
+		whitelist_reg(w, OAREPORTTRIG6);
 		break;
 
 	case VIDEO_DECODE_CLASS:
@@ -1283,6 +1297,10 @@ static void tgl_whitelist_build(struct intel_engine_cs *engine)
 
 		/* Wa_1806527549:tgl */
 		whitelist_reg(w, HIZ_CHICKEN);
+
+		/* Allow userspace trigger OA report generation in OA buffer. */
+		whitelist_reg(w, GEN12_OAG_OAREPORTTRIG2);
+		whitelist_reg(w, GEN12_OAG_OAREPORTTRIG6);
 		break;
 	default:
 		break;
