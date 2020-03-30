@@ -738,6 +738,9 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 #define  GEN12_OAG_OASTATUS_BUFFER_OVERFLOW  (1 << 1)
 #define  GEN12_OAG_OASTATUS_REPORT_LOST      (1 << 0)
 
+/* 8 bytes per counter in the range [0, 35] */
+#define GEN12_OAG_OAPERF(idx) _MMIO(0xd980 + 8 * (idx))
+
 /*
  * Flexible, Aggregate EU Counter Registers.
  * Note: these aren't contiguous

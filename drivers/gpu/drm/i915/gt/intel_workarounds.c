@@ -1301,6 +1301,21 @@ static void tgl_whitelist_build(struct intel_engine_cs *engine)
 		/* Allow userspace trigger OA report generation in OA buffer. */
 		whitelist_reg(w, GEN12_OAG_OAREPORTTRIG2);
 		whitelist_reg(w, GEN12_OAG_OAREPORTTRIG6);
+
+		/*
+		 * Allow userspace to read OAG (global) performance counter
+		 * registers so that performance queries can be implemented by
+		 * reading those rather than parsing the OA buffer.
+		 */
+		whitelist_reg_ext(w, GEN12_OAG_OAPERF(0),
+				  RING_FORCE_TO_NONPRIV_ACCESS_RD |
+				  RING_FORCE_TO_NONPRIV_RANGE_64);
+		whitelist_reg_ext(w, GEN12_OAG_OAPERF(32),
+				  RING_FORCE_TO_NONPRIV_ACCESS_RD |
+				  RING_FORCE_TO_NONPRIV_RANGE_4);
+		whitelist_reg_ext(w, GEN12_OAG_OAPERF(34),
+				  RING_FORCE_TO_NONPRIV_ACCESS_RD |
+				  RING_FORCE_TO_NONPRIV_RANGE_4);
 		break;
 	default:
 		break;

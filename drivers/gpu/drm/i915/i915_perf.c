@@ -4704,8 +4704,10 @@ int i915_perf_ioctl_version(void)
 	 *    application monitor/pin multiple contexts.
 	 *
 	 * 7. Add edge trigger report generation support.
+	 *
+	 * 8: Whitelist OAG performance counter registers on Gen12+.
 	 */
-	return 7;
+	return 8;
 }
 
 #if IS_ENABLED(CONFIG_DRM_I915_SELFTEST)
