@@ -311,6 +311,12 @@ struct i915_perf_stream {
 	 * buffer should be checked for available data.
 	 */
 	u64 poll_oa_period;
+
+	/**
+	 * @config_context: A logical context for use by the perf stream for
+	 * configuring the HW.
+	 */
+	struct intel_context *config_context;
 };
 
 /**
@@ -348,7 +354,8 @@ struct i915_oa_ops {
 	 * @disable_metric_set: Remove system constraints associated with using
 	 * the OA unit.
 	 */
-	void (*disable_metric_set)(struct i915_perf_stream *stream);
+	void (*disable_metric_set)(struct i915_perf_stream *stream,
+				   struct i915_active *active);
 
 	/**
 	 * @oa_enable: Enable periodic sampling
