@@ -263,7 +263,8 @@ static inline int rq_prio(const struct i915_request *rq)
 
 static struct i915_request *schedule_in(struct i915_request *rq, int idx)
 {
-	trace_i915_request_in(rq, idx);
+	trace_i915_request_in(rq, idx,
+			      0 /* TODO: figure out what value GuC chooses */);
 
 	/*
 	 * Currently we are not tracking the rq->context being inflight

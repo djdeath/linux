@@ -790,8 +790,8 @@ DEFINE_EVENT(i915_request, i915_request_execute,
 );
 
 TRACE_EVENT(i915_request_in,
-	    TP_PROTO(struct i915_request *rq, unsigned int port),
-	    TP_ARGS(rq, port),
+	    TP_PROTO(struct i915_request *rq, unsigned int port, u32 hw_id),
+	    TP_ARGS(rq, port, hw_id),
 
 	    TP_STRUCT__entry(
 			     __field(u32, dev)
@@ -801,6 +801,7 @@ TRACE_EVENT(i915_request_in,
 			     __field(u32, seqno)
 			     __field(u32, port)
 			     __field(s32, prio)
+			     __field(u32, hw_id)
 			    ),
 
 	    TP_fast_assign(
@@ -811,12 +812,13 @@ TRACE_EVENT(i915_request_in,
 			   __entry->seqno = rq->fence.seqno;
 			   __entry->prio = rq->sched.attr.priority;
 			   __entry->port = port;
+			   __entry->hw_id = hw_id;
 			   ),
 
-	    TP_printk("dev=%u, engine=%u:%u, ctx=%llu, seqno=%u, prio=%d, port=%u",
+	    TP_printk("dev=%u, engine=%u:%u, ctx=%llu, seqno=%u, prio=%d, port=%u hw_id=%u",
 		      __entry->dev, __entry->class, __entry->instance,
 		      __entry->ctx, __entry->seqno,
-		      __entry->prio, __entry->port)
+		      __entry->prio, __entry->port, __entry->hw_id)
 );
 
 TRACE_EVENT(i915_request_out,
@@ -859,7 +861,7 @@ trace_i915_request_execute(struct i915_request *rq)
 }
 
 static inline void
-trace_i915_request_in(struct i915_request *rq, unsigned int port)
+trace_i915_request_in(struct i915_request *rq, unsigned int port, u32 hw_id)
 {
 }
 
